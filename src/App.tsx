@@ -13,6 +13,7 @@ import WaitlistPage from './features/members/WaitlistPage';
 import MemberDetail from './features/members/MemberDetail';
 import DuesPage from './features/dues/DuesPage';
 import Dashboard from './features/dashboard/Dashboard';
+import CalendarPage from './features/calendar/CalendarPage';
 
 export default function App() {
   return (
@@ -26,7 +27,7 @@ export default function App() {
               <Route path="/" element={<Dashboard />} />
               <Route path="/plots" element={<PlotsPage />} />
               <Route path="/plots/:id" element={<PlotDetail />} />
-              <Route path="/calendar" element={<Placeholder title="Calendar" />} />
+              <Route path="/calendar" element={<CalendarPage />} />
               <Route path="/my-hours" element={<MyHoursPage />} />
               <Route element={<RequireAdmin />}>
                 <Route path="/members" element={<MembersPage />} />
