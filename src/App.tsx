@@ -4,7 +4,6 @@ import { RequireAuth, RequireAdmin } from './auth/guards';
 import SignIn from './auth/SignIn';
 import SignUp from './auth/SignUp';
 import Layout from './components/Layout';
-import Placeholder from './components/Placeholder';
 import MyHoursPage from './features/hours/MyHoursPage';
 import PlotsPage from './features/plots/PlotsPage';
 import PlotDetail from './features/plots/PlotDetail';
@@ -14,6 +13,7 @@ import MemberDetail from './features/members/MemberDetail';
 import DuesPage from './features/dues/DuesPage';
 import Dashboard from './features/dashboard/Dashboard';
 import CalendarPage from './features/calendar/CalendarPage';
+import SettingsPage from './features/settings/SettingsPage';
 
 export default function App() {
   return (
@@ -34,7 +34,7 @@ export default function App() {
                 <Route path="/members/:id" element={<MemberDetail />} />
                 <Route path="/waitlist" element={<WaitlistPage />} />
                 <Route path="/dues" element={<DuesPage />} />
-                <Route path="/settings" element={<Placeholder title="Settings" />} />
+                <Route path="/settings" element={<SettingsPage />} />
               </Route>
             </Route>
           </Route>
