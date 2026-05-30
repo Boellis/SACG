@@ -19,7 +19,9 @@ export const auth = getAuth(app);
 export const db = initializeFirestore(app, { ignoreUndefinedProperties: true });
 export const googleProvider = new GoogleAuthProvider();
 
-if (import.meta.env.VITE_USE_EMULATORS === 'true') {
+// Only connect to local emulators during dev (`vite dev`). A production build
+// (import.meta.env.DEV === false) never touches localhost, even if the flag is left on.
+if (import.meta.env.DEV && import.meta.env.VITE_USE_EMULATORS === 'true') {
   connectAuthEmulator(auth, 'http://localhost:9099', { disableWarnings: true });
   connectFirestoreEmulator(db, 'localhost', 8080);
 }
