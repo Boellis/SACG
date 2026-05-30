@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { useAuth } from '../../auth/useAuth';
 import { Button, Card, Badge, Field } from '../../components/ui';
-import type { Member, Plot, Role, MemberStatus } from '../../lib/types';
+import type { Member, Plot, Role, MemberStatus, VolunteerHour } from '../../lib/types';
 import {
   listenMember,
   approveMember,
@@ -10,6 +11,9 @@ import {
   updateMemberProfile,
 } from './membersApi';
 import { listenPlots } from '../plots/plotsApi';
+import { listenMemberHours, addHours, deleteHours } from '../hours/hoursApi';
+import { yearToDateHours } from '../../logic/hours';
+import { formatTenure } from '../../lib/tenure';
 
 function RoleBadge({ role }: { role: Role }) {
   return <Badge color={role === 'admin' ? 'blue' : 'gray'}>{role}</Badge>;
@@ -27,9 +31,11 @@ function StatusBadge({ status }: { status: MemberStatus }) {
 export default function MemberDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   const [member, setMember] = useState<Member | null | undefined>(undefined);
   const [plots, setPlots] = useState<Plot[]>([]);
+  const [hourEntries, setHourEntries] = useState<VolunteerHour[]>([]);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
@@ -38,6 +44,15 @@ export default function MemberDetail() {
   const [editName, setEditName] = useState('');
   const [editPhone, setEditPhone] = useState('');
   const [editNotes, setEditNotes] = useState('');
+
+  // Add hours form state
+  const [hoursDate, setHoursDate] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  });
+  const [hoursAmount, setHoursAmount] = useState('');
+  const [hoursDesc, setHoursDesc] = useState('');
+  const [addingHours, setAddingHours] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -49,6 +64,12 @@ export default function MemberDetail() {
     const unsub = listenPlots((data) => setPlots(data));
     return unsub;
   }, []);
+
+  useEffect(() => {
+    if (!id) return;
+    const unsub = listenMemberHours(id, setHourEntries);
+    return unsub;
+  }, [id]);
 
   function startEdit() {
     if (!member) return;
@@ -94,6 +115,31 @@ export default function MemberDetail() {
   }
 
   const memberPlots = member ? plots.filter((p) => p.holderMemberId === member.id) : [];
+  const ytdHours = yearToDateHours(hourEntries, new Date().getUTCFullYear());
+  const sortedHours = [...hourEntries].sort(
+    (a, b) => b.date.toDate().getTime() - a.date.toDate().getTime(),
+  );
+
+  async function handleAddHours(e: React.FormEvent) {
+    e.preventDefault();
+    if (!member || !user) return;
+    const hrs = parseFloat(hoursAmount);
+    if (isNaN(hrs) || hrs <= 0) return;
+    setAddingHours(true);
+    try {
+      await addHours({
+        memberId: member.id,
+        date: new Date(hoursDate + 'T00:00:00'),
+        hours: hrs,
+        description: hoursDesc.trim() || undefined,
+        recordedBy: user.uid,
+      });
+      setHoursAmount('');
+      setHoursDesc('');
+    } finally {
+      setAddingHours(false);
+    }
+  }
 
   if (member === undefined) {
     return <div className="p-6 text-gray-500 text-sm">Loading member…</div>;
@@ -142,6 +188,10 @@ export default function MemberDetail() {
               <dd className="font-medium">
                 {member.joinedAt ? member.joinedAt.toDate().toLocaleDateString() : '—'}
               </dd>
+            </div>
+            <div className="flex justify-between">
+              <dt className="text-gray-500">Active in SACG for</dt>
+              <dd className="font-medium">{formatTenure(member.joinedAt, new Date())}</dd>
             </div>
             <div className="flex justify-between">
               <dt className="text-gray-500">Created</dt>
@@ -197,6 +247,62 @@ export default function MemberDetail() {
               ))}
             </ul>
           )}
+        </Card>
+
+        {/* Volunteer Hours */}
+        <Card title="Volunteer Hours">
+          <p className="text-sm text-gray-700 mb-3">
+            YTD: <span className="font-semibold">{ytdHours}</span> hrs
+          </p>
+          {sortedHours.length === 0 ? (
+            <p className="text-sm text-gray-500 mb-3">No entries yet.</p>
+          ) : (
+            <ul className="space-y-1 text-sm mb-4">
+              {sortedHours.map((e) => (
+                <li key={e.id} className="flex items-center justify-between py-1 border-b border-gray-100 last:border-0">
+                  <span>
+                    {e.date.toDate().toLocaleDateString()} &mdash;{' '}
+                    <strong>{e.hours} hrs</strong>
+                    {e.description && ` — ${e.description}`}
+                  </span>
+                  <Button
+                    variant="danger"
+                    className="text-xs px-2 py-0.5 ml-2"
+                    onClick={() => deleteHours(e.id)}
+                  >
+                    Delete
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <form onSubmit={handleAddHours} className="space-y-2 border-t border-gray-100 pt-3">
+            <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Add Entry</p>
+            <Field
+              label="Date"
+              type="date"
+              value={hoursDate}
+              onChange={(e) => setHoursDate(e.target.value)}
+            />
+            <Field
+              label="Hours"
+              type="number"
+              step="0.5"
+              min="0.5"
+              value={hoursAmount}
+              onChange={(e) => setHoursAmount(e.target.value)}
+              placeholder="e.g. 2"
+            />
+            <Field
+              label="Description (optional)"
+              value={hoursDesc}
+              onChange={(e) => setHoursDesc(e.target.value)}
+              placeholder="e.g. Workday"
+            />
+            <Button type="submit" disabled={addingHours} className="w-full">
+              {addingHours ? 'Adding…' : 'Add Hours'}
+            </Button>
+          </form>
         </Card>
 
         {/* Edit Profile */}

@@ -5,6 +5,7 @@ import SignIn from './auth/SignIn';
 import SignUp from './auth/SignUp';
 import Layout from './components/Layout';
 import Placeholder from './components/Placeholder';
+import MyHoursPage from './features/hours/MyHoursPage';
 import PlotsPage from './features/plots/PlotsPage';
 import PlotDetail from './features/plots/PlotDetail';
 import MembersPage from './features/members/MembersPage';
@@ -26,7 +27,7 @@ export default function App() {
               <Route path="/plots" element={<PlotsPage />} />
               <Route path="/plots/:id" element={<PlotDetail />} />
               <Route path="/calendar" element={<Placeholder title="Calendar" />} />
-              <Route path="/my-hours" element={<Placeholder title="My Hours" />} />
+              <Route path="/my-hours" element={<MyHoursPage />} />
               <Route element={<RequireAdmin />}>
                 <Route path="/members" element={<MembersPage />} />
                 <Route path="/members/:id" element={<MemberDetail />} />

@@ -12,6 +12,12 @@ vi.mock('../members/membersApi', () => ({
   listenMembers: vi.fn(),
 }));
 
+// Mock hoursApi so no Firestore calls happen
+vi.mock('../hours/hoursApi', () => ({
+  listenMemberHours: vi.fn(),
+  listenAllHours: vi.fn(),
+}));
+
 // Mock firebase/firestore (not used directly in Dashboard, but needed for module resolution)
 vi.mock('firebase/firestore', () => ({}));
 
@@ -22,11 +28,14 @@ vi.mock('../../auth/useAuth', () => ({
 
 import * as plotsApiMod from '../plots/plotsApi';
 import * as membersApiMod from '../members/membersApi';
+import * as hoursApiMod from '../hours/hoursApi';
 import * as useAuthMod from '../../auth/useAuth';
 import Dashboard from './Dashboard';
 
 const mockedListenPlots = vi.mocked(plotsApiMod.listenPlots);
 const mockedListenMembers = vi.mocked(membersApiMod.listenMembers);
+const mockedListenMemberHours = vi.mocked(hoursApiMod.listenMemberHours);
+const mockedListenAllHours = vi.mocked(hoursApiMod.listenAllHours);
 const mockedUseAuth = vi.mocked(useAuthMod.useAuth);
 
 // Helper to build a fake Plot with required fields
@@ -96,6 +105,12 @@ describe('Dashboard — Admin view', () => {
       ]);
       return vi.fn();
     });
+
+    // All hours (admin community total)
+    mockedListenAllHours.mockImplementation((cb) => {
+      cb([]);
+      return vi.fn();
+    });
   });
 
   it('shows occupied 2/3 plots', () => {
@@ -163,6 +178,21 @@ describe('Dashboard — Member view', () => {
       cb([]);
       return vi.fn();
     });
+
+    // Member hours – 4 hours in 2026
+    mockedListenMemberHours.mockImplementation((_id, cb) => {
+      cb([
+        {
+          id: 'h1',
+          memberId: 'm1',
+          date: { toDate: () => new Date('2026-03-01T00:00:00Z') },
+          hours: 4,
+          recordedBy: 'm1',
+          createdAt: { toDate: () => new Date('2026-03-01T00:00:00Z') },
+        },
+      ] as any);
+      return vi.fn();
+    });
   });
 
   it("shows their own plot id but not others' plot ids", () => {
@@ -178,12 +208,13 @@ describe('Dashboard — Member view', () => {
     expect(screen.queryByText('plot-C')).not.toBeInTheDocument();
   });
 
-  it('shows volunteer hours 4 / 12', () => {
+  it('shows volunteer hours 4 / 12', async () => {
     render(
       <MemoryRouter>
         <Dashboard />
       </MemoryRouter>,
     );
-    expect(screen.getByText(/4\s*\/\s*12/)).toBeInTheDocument();
+    // hours come from live entries via listenMemberHours (4 hrs from fixture)
+    expect(await screen.findByText(/4\s*\/\s*12/)).toBeInTheDocument();
   });
 });

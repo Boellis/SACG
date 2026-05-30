@@ -3,10 +3,13 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../../auth/useAuth';
 import { listenPlots } from '../plots/plotsApi';
 import { listenMembers } from '../members/membersApi';
+import { listenMemberHours, listenAllHours } from '../hours/hoursApi';
 import { computeDuesRollup } from '../../logic/dues';
 import { waitlistOrder } from '../../logic/waitlist';
+import { yearToDateHours } from '../../logic/hours';
+import { formatTenure } from '../../lib/tenure';
 import { Card, Badge, Button } from '../../components/ui';
-import type { Plot, Member } from '../../lib/types';
+import type { Plot, Member, VolunteerHour } from '../../lib/types';
 
 // ---------------------------------------------------------------------------
 // Admin view
@@ -15,17 +18,20 @@ import type { Plot, Member } from '../../lib/types';
 function AdminDashboard({ displayName }: { displayName: string }) {
   const [plots, setPlots] = useState<Plot[] | null>(null);
   const [members, setMembers] = useState<Member[] | null>(null);
+  const [allHours, setAllHours] = useState<VolunteerHour[] | null>(null);
 
   useEffect(() => {
     const unsubPlots = listenPlots(setPlots);
     const unsubMembers = listenMembers(setMembers);
+    const unsubHours = listenAllHours(setAllHours);
     return () => {
       unsubPlots();
       unsubMembers();
+      unsubHours();
     };
   }, []);
 
-  if (plots === null || members === null) {
+  if (plots === null || members === null || allHours === null) {
     return <p className="text-gray-500">Loading…</p>;
   }
 
@@ -34,6 +40,7 @@ function AdminDashboard({ displayName }: { displayName: string }) {
   const rollup = computeDuesRollup(plots);
   const activeCount = members.filter((m) => m.status === 'active').length;
   const waitlistCount = waitlistOrder(members).length;
+  const communityHours = yearToDateHours(allHours, new Date().getUTCFullYear());
 
   const outstanding = rollup.outstanding.toLocaleString('en-US', {
     style: 'currency',
@@ -78,6 +85,11 @@ function AdminDashboard({ displayName }: { displayName: string }) {
           </Link>
         </Card>
 
+        <Card title="Community hours (this year)">
+          <p className="text-3xl font-bold text-garden-700">{communityHours}</p>
+          <p className="text-sm text-gray-500 mt-1">hours logged</p>
+        </Card>
+
       </div>
     </div>
   );
@@ -89,28 +101,36 @@ function AdminDashboard({ displayName }: { displayName: string }) {
 
 const ANNUAL_HOURS_REQUIRED = 12;
 
-function MemberDashboard({ memberId, displayName, currentYearHours }: {
-  memberId: string;
-  displayName: string;
-  currentYearHours: number;
-}) {
+function MemberDashboard({ member }: { member: Member }) {
   const [plots, setPlots] = useState<Plot[] | null>(null);
+  const [entries, setEntries] = useState<VolunteerHour[] | null>(null);
 
   useEffect(() => {
-    const unsub = listenPlots(setPlots);
-    return unsub;
-  }, []);
+    const unsubPlots = listenPlots(setPlots);
+    const unsubHours = listenMemberHours(member.id, setEntries);
+    return () => {
+      unsubPlots();
+      unsubHours();
+    };
+  }, [member.id]);
 
-  if (plots === null) {
+  if (plots === null || entries === null) {
     return <p className="text-gray-500">Loading…</p>;
   }
 
-  const myPlots = plots.filter((p) => p.holderMemberId === memberId);
-  const hoursPercent = Math.min(100, (currentYearHours / ANNUAL_HOURS_REQUIRED) * 100);
+  const myPlots = plots.filter((p) => p.holderMemberId === member.id);
+  const ytdHours = yearToDateHours(entries, new Date().getUTCFullYear());
+  const hoursPercent = Math.min(100, (ytdHours / ANNUAL_HOURS_REQUIRED) * 100);
+  const tenure = formatTenure(member.joinedAt, new Date());
 
   return (
     <div className="space-y-6 p-6">
-      <h1 className="text-2xl font-bold text-gray-800">Welcome, {displayName}</h1>
+      <div className="flex flex-wrap items-baseline gap-3">
+        <h1 className="text-2xl font-bold text-gray-800">Welcome, {member.displayName}</h1>
+        {tenure !== '—' && (
+          <span className="text-sm text-gray-500">Member for {tenure}</span>
+        )}
+      </div>
 
       {myPlots.length === 0 ? (
         <Card>
@@ -137,7 +157,7 @@ function MemberDashboard({ memberId, displayName, currentYearHours }: {
 
       <Card title="Volunteer Hours">
         <p className="text-sm text-gray-700 mb-2">
-          {currentYearHours} / {ANNUAL_HOURS_REQUIRED} hours this year
+          {ytdHours} / {ANNUAL_HOURS_REQUIRED} hours this year
         </p>
         <div className="w-full bg-gray-200 rounded-full h-2.5">
           <div
@@ -165,11 +185,5 @@ export default function Dashboard() {
     return <AdminDashboard displayName={member.displayName} />;
   }
 
-  return (
-    <MemberDashboard
-      memberId={member.id}
-      displayName={member.displayName}
-      currentYearHours={member.currentYearHours}
-    />
-  );
+  return <MemberDashboard member={member} />;
 }
