@@ -20,6 +20,7 @@ const adminNavItems: NavItem[] = [
   { to: '/waitlist', label: 'Waitlist' },
   { to: '/dues', label: 'Dues' },
   { to: '/settings', label: 'Settings' },
+  { to: '/email', label: 'Email' },
 ];
 
 function NavItems() {

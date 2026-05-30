@@ -14,6 +14,7 @@ import DuesPage from './features/dues/DuesPage';
 import Dashboard from './features/dashboard/Dashboard';
 import CalendarPage from './features/calendar/CalendarPage';
 import SettingsPage from './features/settings/SettingsPage';
+import EmailPage from './features/email/EmailPage';
 
 export default function App() {
   return (
@@ -35,6 +36,7 @@ export default function App() {
                 <Route path="/waitlist" element={<WaitlistPage />} />
                 <Route path="/dues" element={<DuesPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
+                <Route path="/email" element={<EmailPage />} />
               </Route>
             </Route>
           </Route>
