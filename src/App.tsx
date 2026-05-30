@@ -7,6 +7,9 @@ import Layout from './components/Layout';
 import Placeholder from './components/Placeholder';
 import PlotsPage from './features/plots/PlotsPage';
 import PlotDetail from './features/plots/PlotDetail';
+import MembersPage from './features/members/MembersPage';
+import WaitlistPage from './features/members/WaitlistPage';
+import MemberDetail from './features/members/MemberDetail';
 
 export default function App() {
   return (
@@ -23,8 +26,9 @@ export default function App() {
               <Route path="/calendar" element={<Placeholder title="Calendar" />} />
               <Route path="/my-hours" element={<Placeholder title="My Hours" />} />
               <Route element={<RequireAdmin />}>
-                <Route path="/members" element={<Placeholder title="Members" />} />
-                <Route path="/waitlist" element={<Placeholder title="Waitlist" />} />
+                <Route path="/members" element={<MembersPage />} />
+                <Route path="/members/:id" element={<MemberDetail />} />
+                <Route path="/waitlist" element={<WaitlistPage />} />
                 <Route path="/dues" element={<Placeholder title="Dues" />} />
                 <Route path="/settings" element={<Placeholder title="Settings" />} />
               </Route>
