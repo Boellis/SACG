@@ -5,6 +5,8 @@ import SignIn from './auth/SignIn';
 import SignUp from './auth/SignUp';
 import Layout from './components/Layout';
 import Placeholder from './components/Placeholder';
+import PlotsPage from './features/plots/PlotsPage';
+import PlotDetail from './features/plots/PlotDetail';
 
 export default function App() {
   return (
@@ -16,8 +18,8 @@ export default function App() {
           <Route element={<RequireAuth />}>
             <Route element={<Layout />}>
               <Route path="/" element={<Placeholder title="Dashboard" />} />
-              <Route path="/plots" element={<Placeholder title="Plots" />} />
-              <Route path="/plots/:id" element={<Placeholder title="Plot detail" />} />
+              <Route path="/plots" element={<PlotsPage />} />
+              <Route path="/plots/:id" element={<PlotDetail />} />
               <Route path="/calendar" element={<Placeholder title="Calendar" />} />
               <Route path="/my-hours" element={<Placeholder title="My Hours" />} />
               <Route element={<RequireAdmin />}>
