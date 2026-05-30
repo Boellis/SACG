@@ -44,7 +44,6 @@ export async function createPlot(input: CreatePlotInput): Promise<void> {
     depositAmount: depositAmount ?? 25,
     duesPaid: false,
     depositPaid: false,
-    paidDate: undefined,
     season,
     crops: [],
     notes: '',
