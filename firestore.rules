@@ -43,7 +43,8 @@ service cloud.firestore {
 
     match /volunteerHours/{id} {
       allow read: if isAdmin() || (signedIn() && resource.data.memberId == request.auth.uid);
-      allow write: if isAdmin();
+      allow create: if isAdmin() || (isActive() && request.resource.data.memberId == request.auth.uid);
+      allow update, delete: if isAdmin() || (isActive() && resource.data.memberId == request.auth.uid);
     }
 
     match /mail/{id} {

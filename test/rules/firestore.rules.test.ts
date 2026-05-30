@@ -6,7 +6,7 @@ import {
   assertFails,
   RulesTestEnvironment,
 } from '@firebase/rules-unit-testing';
-import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 
 let testEnv: RulesTestEnvironment;
 
@@ -73,6 +73,23 @@ async function seed() {
       start: NOW,
       end: NOW,
       allDay: false,
+    });
+    // Hours docs for self-logging tests. H_active1 owned by active1, H_active2 by active2.
+    await setDoc(doc(db, 'volunteerHours', 'H_active1'), {
+      memberId: 'active1',
+      date: NOW,
+      hours: 3,
+      description: 'weeding',
+      recordedBy: 'active1',
+      createdAt: NOW,
+    });
+    await setDoc(doc(db, 'volunteerHours', 'H_active2'), {
+      memberId: 'active2',
+      date: NOW,
+      hours: 3,
+      description: 'weeding',
+      recordedBy: 'active2',
+      createdAt: NOW,
     });
   });
 }
@@ -242,5 +259,62 @@ describe('Firestore security rules — events/rsvps & mail', () => {
     await assertFails(setDoc(doc(activeDb, 'mail', 'M1'), mailDoc));
     const adminDb = testEnv.authenticatedContext('admin1').firestore();
     await assertSucceeds(setDoc(doc(adminDb, 'mail', 'M1'), mailDoc));
+  });
+});
+
+describe('Firestore security rules — volunteerHours self-logging', () => {
+  const hoursDoc = (memberId: string, recordedBy: string) => ({
+    memberId,
+    date: NOW,
+    hours: 3,
+    description: 'weeding',
+    recordedBy,
+    createdAt: NOW,
+  });
+
+  it('19. active1 creates own hours doc SUCCEEDS', async () => {
+    const db = testEnv.authenticatedContext('active1').firestore();
+    await assertSucceeds(
+      setDoc(doc(db, 'volunteerHours', 'H_new1'), hoursDoc('active1', 'active1')),
+    );
+  });
+
+  it('20. active1 creates hours doc for active2 (not self) FAILS', async () => {
+    const db = testEnv.authenticatedContext('active1').firestore();
+    await assertFails(
+      setDoc(doc(db, 'volunteerHours', 'H_new2'), hoursDoc('active2', 'active1')),
+    );
+  });
+
+  it('21. pending1 creates own hours doc FAILS (not active)', async () => {
+    const db = testEnv.authenticatedContext('pending1').firestore();
+    await assertFails(
+      setDoc(doc(db, 'volunteerHours', 'H_new3'), hoursDoc('pending1', 'pending1')),
+    );
+  });
+
+  it('22. active1 updates own hours doc SUCCEEDS; updates active2 hours doc FAILS', async () => {
+    const db = testEnv.authenticatedContext('active1').firestore();
+    await assertSucceeds(updateDoc(doc(db, 'volunteerHours', 'H_active1'), { hours: 4 }));
+    await assertFails(updateDoc(doc(db, 'volunteerHours', 'H_active2'), { hours: 4 }));
+  });
+
+  it('23. active1 deletes own hours doc SUCCEEDS', async () => {
+    const db = testEnv.authenticatedContext('active1').firestore();
+    await assertSucceeds(deleteDoc(doc(db, 'volunteerHours', 'H_active1')));
+  });
+
+  it('24. active1 reads own hours doc SUCCEEDS; reads active2 hours doc FAILS', async () => {
+    const db = testEnv.authenticatedContext('active1').firestore();
+    await assertSucceeds(getDoc(doc(db, 'volunteerHours', 'H_active1')));
+    await assertFails(getDoc(doc(db, 'volunteerHours', 'H_active2')));
+  });
+
+  it('25. admin1 creates hours doc for active1 SUCCEEDS; reads active2 hours doc SUCCEEDS', async () => {
+    const db = testEnv.authenticatedContext('admin1').firestore();
+    await assertSucceeds(
+      setDoc(doc(db, 'volunteerHours', 'H_admin1'), hoursDoc('active1', 'admin1')),
+    );
+    await assertSucceeds(getDoc(doc(db, 'volunteerHours', 'H_active2')));
   });
 });
