@@ -2,12 +2,80 @@ import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import {
   initializeTestEnvironment,
+  assertSucceeds,
   assertFails,
   RulesTestEnvironment,
 } from '@firebase/rules-unit-testing';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 
 let testEnv: RulesTestEnvironment;
+
+const NOW = new Date('2026-01-01T00:00:00Z');
+
+async function seed() {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await setDoc(doc(db, 'members', 'admin1'), {
+      role: 'admin',
+      status: 'active',
+      displayName: 'Admin',
+      email: 'a@x.com',
+      createdAt: NOW,
+      currentYearHours: 0,
+    });
+    await setDoc(doc(db, 'members', 'active1'), {
+      role: 'member',
+      status: 'active',
+      displayName: 'Active One',
+      email: 'a1@x.com',
+      createdAt: NOW,
+      currentYearHours: 0,
+    });
+    await setDoc(doc(db, 'members', 'active2'), {
+      role: 'member',
+      status: 'active',
+      displayName: 'Active Two',
+      email: 'a2@x.com',
+      createdAt: NOW,
+      currentYearHours: 0,
+    });
+    await setDoc(doc(db, 'members', 'pending1'), {
+      role: 'member',
+      status: 'pending',
+      displayName: 'Pending One',
+      email: 'p1@x.com',
+      createdAt: NOW,
+      currentYearHours: 0,
+    });
+    await setDoc(doc(db, 'plots', 'P1'), {
+      number: 1,
+      half: 'whole',
+      status: 'assigned',
+      holderMemberId: 'active1',
+      duesAmount: 30,
+      depositAmount: 25,
+      duesPaid: false,
+      depositPaid: false,
+      season: '2026',
+      crops: [],
+    });
+    await setDoc(doc(db, 'settings', 'org'), {
+      requiredHours: 12,
+      firstHalfHours: 6,
+      firstHalfMonths: 6,
+      defaultDeposit: 25,
+      currentSeason: '2026',
+      contactEmail: 'org@x.com',
+    });
+    await setDoc(doc(db, 'events', 'E1'), {
+      title: 'Workday',
+      type: 'workday',
+      start: NOW,
+      end: NOW,
+      allDay: false,
+    });
+  });
+}
 
 beforeAll(async () => {
   testEnv = await initializeTestEnvironment({
@@ -22,10 +90,157 @@ afterAll(async () => {
   await testEnv.cleanup();
 });
 
-describe('Firestore security rules — baseline (deny all)', () => {
-  it('denies unauthenticated reads on the plots collection', async () => {
-    const ctx = testEnv.unauthenticatedContext();
-    const db = ctx.firestore();
-    await assertFails(getDoc(doc(db, 'plots', '1')));
+beforeEach(async () => {
+  await testEnv.clearFirestore();
+  await seed();
+});
+
+describe('Firestore security rules — plots', () => {
+  it('1. unauthenticated read of plots/P1 FAILS', async () => {
+    const db = testEnv.unauthenticatedContext().firestore();
+    await assertFails(getDoc(doc(db, 'plots', 'P1')));
+  });
+
+  it('2. pending1 read plots/P1 FAILS', async () => {
+    const db = testEnv.authenticatedContext('pending1').firestore();
+    await assertFails(getDoc(doc(db, 'plots', 'P1')));
+  });
+
+  it('3. active1 read plots/P1 SUCCEEDS', async () => {
+    const db = testEnv.authenticatedContext('active1').firestore();
+    await assertSucceeds(getDoc(doc(db, 'plots', 'P1')));
+  });
+
+  it('4. admin1 read plots/P1 SUCCEEDS', async () => {
+    const db = testEnv.authenticatedContext('admin1').firestore();
+    await assertSucceeds(getDoc(doc(db, 'plots', 'P1')));
+  });
+
+  it('5. active1 (holder) updates plots/P1 crops SUCCEEDS', async () => {
+    const db = testEnv.authenticatedContext('active1').firestore();
+    await assertSucceeds(updateDoc(doc(db, 'plots', 'P1'), { crops: [{ name: 'Kale' }] }));
+  });
+
+  it('6. active1 updates plots/P1 duesPaid FAILS', async () => {
+    const db = testEnv.authenticatedContext('active1').firestore();
+    await assertFails(updateDoc(doc(db, 'plots', 'P1'), { duesPaid: true }));
+  });
+
+  it('7. active2 (not holder) updates plots/P1 crops FAILS', async () => {
+    const db = testEnv.authenticatedContext('active2').firestore();
+    await assertFails(updateDoc(doc(db, 'plots', 'P1'), { crops: [{ name: 'Kale' }] }));
+  });
+
+  it('8. admin1 updates plots/P1 duesPaid SUCCEEDS', async () => {
+    const db = testEnv.authenticatedContext('admin1').firestore();
+    await assertSucceeds(updateDoc(doc(db, 'plots', 'P1'), { duesPaid: true }));
+  });
+
+  it('9. admin1 create plots/P9 SUCCEEDS; active1 create plots/P9 FAILS', async () => {
+    const newPlot = {
+      number: 9,
+      half: 'whole',
+      status: 'available',
+      duesAmount: 30,
+      depositAmount: 25,
+      duesPaid: false,
+      depositPaid: false,
+      season: '2026',
+      crops: [],
+    };
+    const adminDb = testEnv.authenticatedContext('admin1').firestore();
+    await assertSucceeds(setDoc(doc(adminDb, 'plots', 'P9'), newPlot));
+    const activeDb = testEnv.authenticatedContext('active1').firestore();
+    await assertFails(setDoc(doc(activeDb, 'plots', 'P9'), newPlot));
+  });
+});
+
+describe('Firestore security rules — members', () => {
+  it('10. active1 reads own members/active1 SUCCEEDS', async () => {
+    const db = testEnv.authenticatedContext('active1').firestore();
+    await assertSucceeds(getDoc(doc(db, 'members', 'active1')));
+  });
+
+  it('11. active1 reads members/admin1 (someone else) FAILS', async () => {
+    const db = testEnv.authenticatedContext('active1').firestore();
+    await assertFails(getDoc(doc(db, 'members', 'admin1')));
+  });
+
+  it('12. active1 updates own doc displayName SUCCEEDS', async () => {
+    const db = testEnv.authenticatedContext('active1').firestore();
+    await assertSucceeds(updateDoc(doc(db, 'members', 'active1'), { displayName: 'New' }));
+  });
+
+  it('13. active1 updates own doc role:admin FAILS (no self-escalation)', async () => {
+    const db = testEnv.authenticatedContext('active1').firestore();
+    await assertFails(updateDoc(doc(db, 'members', 'active1'), { role: 'admin' }));
+  });
+
+  it('14. active1 changing role alongside other fields FAILS; active1 updating active2 FAILS', async () => {
+    const db = testEnv.authenticatedContext('active1').firestore();
+    await assertFails(
+      updateDoc(doc(db, 'members', 'active1'), { status: 'active', role: 'admin' }),
+    );
+    await assertFails(updateDoc(doc(db, 'members', 'active2'), { displayName: 'Hacked' }));
+  });
+
+  it('15. admin1 updates members/active1 role:admin SUCCEEDS', async () => {
+    const db = testEnv.authenticatedContext('admin1').firestore();
+    await assertSucceeds(updateDoc(doc(db, 'members', 'active1'), { role: 'admin' }));
+  });
+
+  it('16. newuser creates own member (member/pending) SUCCEEDS; as admin FAILS', async () => {
+    const db = testEnv.authenticatedContext('newuser').firestore();
+    await assertSucceeds(
+      setDoc(doc(db, 'members', 'newuser'), {
+        role: 'member',
+        status: 'pending',
+        displayName: 'New User',
+        email: 'n@x.com',
+        createdAt: NOW,
+        currentYearHours: 0,
+      }),
+    );
+    await assertFails(
+      setDoc(doc(db, 'members', 'newuser'), {
+        role: 'admin',
+        status: 'pending',
+        displayName: 'New User',
+        email: 'n@x.com',
+        createdAt: NOW,
+        currentYearHours: 0,
+      }),
+    );
+  });
+});
+
+describe('Firestore security rules — events/rsvps & mail', () => {
+  it('17. active1 writes own rsvp SUCCEEDS; writes active2 rsvp FAILS', async () => {
+    const db = testEnv.authenticatedContext('active1').firestore();
+    await assertSucceeds(
+      setDoc(doc(db, 'events', 'E1', 'rsvps', 'active1'), {
+        status: 'yes',
+        displayName: 'Active One',
+        respondedAt: NOW,
+      }),
+    );
+    await assertFails(
+      setDoc(doc(db, 'events', 'E1', 'rsvps', 'active2'), {
+        status: 'yes',
+        displayName: 'Active One',
+        respondedAt: NOW,
+      }),
+    );
+  });
+
+  it('18. active1 creates mail/M1 FAILS; admin1 creates mail/M1 SUCCEEDS', async () => {
+    const mailDoc = {
+      to: ['x@x.com'],
+      message: { subject: 'Hi', text: 'Hello' },
+    };
+    const activeDb = testEnv.authenticatedContext('active1').firestore();
+    await assertFails(setDoc(doc(activeDb, 'mail', 'M1'), mailDoc));
+    const adminDb = testEnv.authenticatedContext('admin1').firestore();
+    await assertSucceeds(setDoc(doc(adminDb, 'mail', 'M1'), mailDoc));
   });
 });

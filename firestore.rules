@@ -1,6 +1,54 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /{document=**} { allow read, write: if false; }
+    function signedIn() { return request.auth != null; }
+    function exists_(uid) { return exists(/databases/$(database)/documents/members/$(uid)); }
+    function memberData() { return get(/databases/$(database)/documents/members/$(request.auth.uid)).data; }
+    function isAdmin() { return signedIn() && exists_(request.auth.uid) && memberData().role == 'admin'; }
+    function isActive() { return signedIn() && exists_(request.auth.uid) && memberData().status == 'active'; }
+
+    match /settings/{doc} {
+      allow read: if isActive() || isAdmin();
+      allow write: if isAdmin();
+    }
+
+    match /members/{uid} {
+      allow read: if isAdmin() || (signedIn() && request.auth.uid == uid);
+      allow create: if signedIn() && request.auth.uid == uid
+        && request.resource.data.role == 'member'
+        && request.resource.data.status == 'pending';
+      allow update: if isAdmin() || (signedIn() && request.auth.uid == uid
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.status == resource.data.status
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName','phone']));
+      allow delete: if isAdmin();
+    }
+
+    match /plots/{id} {
+      allow read: if isActive() || isAdmin();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || (isActive()
+        && resource.data.holderMemberId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['crops']));
+    }
+
+    match /events/{id} {
+      allow read: if isActive() || isAdmin();
+      allow write: if isAdmin();
+      match /rsvps/{uid} {
+        allow read: if isActive() || isAdmin();
+        allow write: if isAdmin() || (signedIn() && request.auth.uid == uid);
+      }
+    }
+
+    match /volunteerHours/{id} {
+      allow read: if isAdmin() || (signedIn() && resource.data.memberId == request.auth.uid);
+      allow write: if isAdmin();
+    }
+
+    match /mail/{id} {
+      allow read, delete: if isAdmin();
+      allow create: if isAdmin();
+    }
   }
 }
