@@ -10,6 +10,7 @@ import PlotDetail from './features/plots/PlotDetail';
 import MembersPage from './features/members/MembersPage';
 import WaitlistPage from './features/members/WaitlistPage';
 import MemberDetail from './features/members/MemberDetail';
+import DuesPage from './features/dues/DuesPage';
 
 export default function App() {
   return (
@@ -29,7 +30,7 @@ export default function App() {
                 <Route path="/members" element={<MembersPage />} />
                 <Route path="/members/:id" element={<MemberDetail />} />
                 <Route path="/waitlist" element={<WaitlistPage />} />
-                <Route path="/dues" element={<Placeholder title="Dues" />} />
+                <Route path="/dues" element={<DuesPage />} />
                 <Route path="/settings" element={<Placeholder title="Settings" />} />
               </Route>
             </Route>
