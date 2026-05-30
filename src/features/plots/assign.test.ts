@@ -10,9 +10,10 @@ vi.mock('firebase/firestore', () => {
   const collection = vi.fn((_db: unknown, path: unknown) => ({ _path: path }));
   const getDoc = vi.fn();
 
-  // writeBatch mock: returns object with set/delete/commit vi.fns
+  // writeBatch mock: returns object with set/update/delete/commit vi.fns
   const mockBatch = {
     set: vi.fn(),
+    update: vi.fn(),
     delete: vi.fn(),
     commit: vi.fn().mockResolvedValue(undefined),
   };
@@ -103,16 +104,23 @@ describe('assignPlot', () => {
     vi.clearAllMocks();
   });
 
-  it('calls updateDoc with holderMemberId, holderName, status:assigned for an active member', async () => {
+  it('uses writeBatch and calls batch.update once (plot only) for an active member', async () => {
     await assignPlot(basePlot, activeMember);
 
-    expect(mockedUpdateDoc).toHaveBeenCalledTimes(1);
-    const patch = (mockedUpdateDoc.mock.calls[0] as unknown as [unknown, Record<string, unknown>])[1];
+    expect(mockedWriteBatch).toHaveBeenCalledTimes(1);
+    const batch = mockedWriteBatch.mock.results[0].value as {
+      update: ReturnType<typeof vi.fn>;
+      commit: ReturnType<typeof vi.fn>;
+    };
+
+    expect(batch.update).toHaveBeenCalledTimes(1);
+    const [, patch] = batch.update.mock.calls[0] as [unknown, Record<string, unknown>];
     expect(patch).toMatchObject({
       holderMemberId: 'member-active',
       holderName: 'Alice Active',
       status: 'assigned',
     });
+    expect(batch.commit).toHaveBeenCalledTimes(1);
   });
 
   it('does NOT call approveMember when member is active', async () => {
@@ -120,21 +128,31 @@ describe('assignPlot', () => {
     expect(mockedApproveMember).not.toHaveBeenCalled();
   });
 
-  it('calls approveMember when assigning a pending member', async () => {
+  it('calls batch.update twice (plot + member approval) when assigning a pending member', async () => {
     await assignPlot(basePlot, pendingMember);
-    expect(mockedApproveMember).toHaveBeenCalledTimes(1);
-    expect(mockedApproveMember).toHaveBeenCalledWith('member-pending');
-  });
 
-  it('still calls updateDoc with correct data when member is pending', async () => {
-    await assignPlot(basePlot, pendingMember);
-    expect(mockedUpdateDoc).toHaveBeenCalledTimes(1);
-    const patch = (mockedUpdateDoc.mock.calls[0] as unknown as [unknown, Record<string, unknown>])[1];
-    expect(patch).toMatchObject({
+    expect(mockedWriteBatch).toHaveBeenCalledTimes(1);
+    const batch = mockedWriteBatch.mock.results[0].value as {
+      update: ReturnType<typeof vi.fn>;
+      commit: ReturnType<typeof vi.fn>;
+    };
+
+    expect(batch.update).toHaveBeenCalledTimes(2);
+
+    // First update: plot assignment
+    const [, plotPatch] = batch.update.mock.calls[0] as [unknown, Record<string, unknown>];
+    expect(plotPatch).toMatchObject({
       holderMemberId: 'member-pending',
       holderName: 'Bob Pending',
       status: 'assigned',
     });
+
+    // Second update: member approval
+    const [, memberPatch] = batch.update.mock.calls[1] as [unknown, Record<string, unknown>];
+    expect(memberPatch).toMatchObject({ status: 'active' });
+    expect(memberPatch).toHaveProperty('joinedAt');
+
+    expect(batch.commit).toHaveBeenCalledTimes(1);
   });
 });
 

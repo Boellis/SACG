@@ -10,7 +10,6 @@ import {
 import { plotsCol, plotDoc } from '../../data/collections';
 import { db } from '../../lib/firebase';
 import type { Plot, PlotHalf, Member, Crop } from '../../lib/types';
-import { approveMember } from '../members/membersApi';
 import { splitPlotIds } from '../../logic/plots';
 
 export function listenPlots(cb: (plots: Plot[]) => void): Unsubscribe {
@@ -73,14 +72,19 @@ export async function toggleDepositPaid(id: string, paid: boolean): Promise<void
 }
 
 export async function assignPlot(plot: Plot, member: Member): Promise<void> {
-  await updateDoc(plotDoc(plot.id), {
+  const batch = writeBatch(db);
+  batch.update(doc(db, 'plots', plot.id), {
     holderMemberId: member.id,
     holderName: member.displayName,
     status: 'assigned',
-  } as Record<string, unknown>);
+  });
   if (member.status === 'pending') {
-    await approveMember(member.id);
+    batch.update(doc(db, 'members', member.id), {
+      status: 'active',
+      joinedAt: serverTimestamp(),
+    });
   }
+  await batch.commit();
 }
 
 export async function unassignPlot(plotId: string): Promise<void> {
@@ -106,7 +110,7 @@ export async function splitPlot(plot: Plot): Promise<void> {
     depositPaid: false,
     season: plot.season,
     crops: [],
-    mapPos: plot.mapPos ?? null,
+    mapPos: null,
     notes: '',
   };
   batch.set(doc(db, 'plots', aId), { ...halfData, half: 'A' as PlotHalf });
