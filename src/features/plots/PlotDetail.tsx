@@ -7,6 +7,7 @@ import { listenPlot, updatePlot, toggleDuesPaid, toggleDepositPaid, unassignPlot
 import { splitPlotIds } from '../../logic/plots';
 import AssignPlotModal from './AssignPlotModal';
 import CropsEditor from './CropsEditor';
+import PlotLayoutEditor from './PlotLayoutEditor';
 
 function PaidBadge({ paid }: { paid: boolean }) {
   return paid ? <Badge color="green">Paid</Badge> : <Badge color="amber">Unpaid</Badge>;
@@ -245,6 +246,11 @@ export default function PlotDetail() {
         {/* Crops */}
         <Card title="Crops">
           <CropsEditor plot={plot} />
+        </Card>
+
+        {/* Plot Layout */}
+        <Card title="Plot Layout" className="md:col-span-2">
+          <PlotLayoutEditor plot={plot} />
         </Card>
 
         {assignOpen && (

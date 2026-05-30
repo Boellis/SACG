@@ -23,6 +23,10 @@ export interface Member {
 
 export interface Crop { name: string; plantedOn?: Timestamp; notes?: string; }
 
+export type PlotShapeType = 'rect' | 'circle' | 'triangle';
+export interface PlotShape { id: string; type: PlotShapeType; x: number; y: number; w: number; h: number; color: string; label: string; }
+export interface PlotLayout { shapes: PlotShape[]; }
+
 export interface Plot {
   id: string;            // "12" | "12A" | "12B"
   number: number;
@@ -39,6 +43,7 @@ export interface Plot {
   season: string;
   crops: Crop[];
   mapPos?: { row: number; col: number };
+  layout?: PlotLayout;
   notes?: string;
 }
 

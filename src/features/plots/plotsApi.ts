@@ -9,7 +9,7 @@ import {
 } from 'firebase/firestore';
 import { plotsCol, plotDoc } from '../../data/collections';
 import { db } from '../../lib/firebase';
-import type { Plot, PlotHalf, Member, Crop } from '../../lib/types';
+import type { Plot, PlotHalf, Member, Crop, PlotLayout } from '../../lib/types';
 import { splitPlotIds } from '../../logic/plots';
 
 export function listenPlots(cb: (plots: Plot[]) => void): Unsubscribe {
@@ -121,4 +121,8 @@ export async function splitPlot(plot: Plot): Promise<void> {
 
 export async function setCrops(plotId: string, crops: Crop[]): Promise<void> {
   await updateDoc(plotDoc(plotId), { crops } as Record<string, unknown>);
+}
+
+export async function setPlotLayout(plotId: string, layout: PlotLayout): Promise<void> {
+  await updateDoc(plotDoc(plotId), { layout } as Record<string, unknown>);
 }

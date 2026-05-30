@@ -153,6 +153,16 @@ describe('Firestore security rules — plots', () => {
     await assertSucceeds(updateDoc(doc(db, 'plots', 'P1'), { duesPaid: true }));
   });
 
+  it('8a. active1 (holder) updates plots/P1 layout SUCCEEDS', async () => {
+    const db = testEnv.authenticatedContext('active1').firestore();
+    await assertSucceeds(updateDoc(doc(db, 'plots', 'P1'), { layout: { shapes: [] } }));
+  });
+
+  it('8b. active2 (not holder) updates plots/P1 layout FAILS', async () => {
+    const db = testEnv.authenticatedContext('active2').firestore();
+    await assertFails(updateDoc(doc(db, 'plots', 'P1'), { layout: { shapes: [] } }));
+  });
+
   it('9. admin1 create plots/P9 SUCCEEDS; active1 create plots/P9 FAILS', async () => {
     const newPlot = {
       number: 9,

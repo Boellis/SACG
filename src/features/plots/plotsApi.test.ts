@@ -32,7 +32,7 @@ vi.mock('../../data/collections', () => {
 });
 
 import * as firestoreMod from 'firebase/firestore';
-import { toggleDuesPaid, createPlot, toggleDepositPaid } from './plotsApi';
+import { toggleDuesPaid, createPlot, toggleDepositPaid, setPlotLayout } from './plotsApi';
 
 const mockedUpdateDoc = vi.mocked(firestoreMod.updateDoc);
 const mockedSetDoc = vi.mocked(firestoreMod.setDoc);
@@ -117,6 +117,15 @@ describe('plotsApi', () => {
       const callArgs = mockedSetDoc.mock.calls[0] as unknown as [unknown, Record<string, unknown>];
       const data = callArgs[1];
       expect(data).toMatchObject({ half: 'whole' });
+    });
+  });
+
+  describe('setPlotLayout', () => {
+    it('calls updateDoc with { layout: { shapes: [] } }', async () => {
+      await setPlotLayout('1', { shapes: [] });
+      expect(mockedUpdateDoc).toHaveBeenCalledTimes(1);
+      const patch = (mockedUpdateDoc.mock.calls[0] as unknown as [unknown, Record<string, unknown>])[1];
+      expect(patch).toEqual({ layout: { shapes: [] } });
     });
   });
 });
