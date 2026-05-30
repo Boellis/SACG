@@ -272,6 +272,92 @@ describe('Firestore security rules — events/rsvps & mail', () => {
   });
 });
 
+describe('Firestore security rules — forum threads & replies', () => {
+  const threadData = (authorId: string) => ({
+    title: 'Hello Garden',
+    body: 'Anyone have tips for tomatoes?',
+    authorId,
+    authorName: 'Test Author',
+    createdAt: NOW,
+  });
+
+  const replyData = (authorId: string) => ({
+    body: 'Try more sun!',
+    authorId,
+    authorName: 'Replier',
+    createdAt: NOW,
+  });
+
+  beforeEach(async () => {
+    // seed a thread T1 authored by active1
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore();
+      await setDoc(doc(db, 'threads', 'T1'), threadData('active1'));
+      await setDoc(doc(db, 'threads', 'T1', 'replies', 'R1'), replyData('active1'));
+    });
+  });
+
+  it('26. active1 reads threads/T1 SUCCEEDS', async () => {
+    const db = testEnv.authenticatedContext('active1').firestore();
+    await assertSucceeds(getDoc(doc(db, 'threads', 'T1')));
+  });
+
+  it('27. pending1 reads threads/T1 FAILS', async () => {
+    const db = testEnv.authenticatedContext('pending1').firestore();
+    await assertFails(getDoc(doc(db, 'threads', 'T1')));
+  });
+
+  it('28. active1 creates thread with own authorId SUCCEEDS', async () => {
+    const db = testEnv.authenticatedContext('active1').firestore();
+    await assertSucceeds(setDoc(doc(db, 'threads', 'T_new1'), threadData('active1')));
+  });
+
+  it('29. active1 creates thread with authorId:active2 FAILS', async () => {
+    const db = testEnv.authenticatedContext('active1').firestore();
+    await assertFails(setDoc(doc(db, 'threads', 'T_bad'), threadData('active2')));
+  });
+
+  it('30. pending1 creates thread FAILS (not active)', async () => {
+    const db = testEnv.authenticatedContext('pending1').firestore();
+    await assertFails(setDoc(doc(db, 'threads', 'T_pending'), threadData('pending1')));
+  });
+
+  it('31. active2 (non-author) deletes threads/T1 FAILS', async () => {
+    const db = testEnv.authenticatedContext('active2').firestore();
+    await assertFails(deleteDoc(doc(db, 'threads', 'T1')));
+  });
+
+  it('32. active1 (author) deletes own threads/T1 SUCCEEDS', async () => {
+    const db = testEnv.authenticatedContext('active1').firestore();
+    await assertSucceeds(deleteDoc(doc(db, 'threads', 'T1')));
+  });
+
+  it('33. admin1 deletes threads/T1 SUCCEEDS', async () => {
+    const db = testEnv.authenticatedContext('admin1').firestore();
+    await assertSucceeds(deleteDoc(doc(db, 'threads', 'T1')));
+  });
+
+  it('34. active1 creates reply on T1 with own authorId SUCCEEDS', async () => {
+    const db = testEnv.authenticatedContext('active1').firestore();
+    await assertSucceeds(setDoc(doc(db, 'threads', 'T1', 'replies', 'R_new'), replyData('active1')));
+  });
+
+  it('35. active1 creates reply with authorId:active2 FAILS', async () => {
+    const db = testEnv.authenticatedContext('active1').firestore();
+    await assertFails(setDoc(doc(db, 'threads', 'T1', 'replies', 'R_bad'), replyData('active2')));
+  });
+
+  it('36. active2 (non-author) deletes T1/replies/R1 FAILS', async () => {
+    const db = testEnv.authenticatedContext('active2').firestore();
+    await assertFails(deleteDoc(doc(db, 'threads', 'T1', 'replies', 'R1')));
+  });
+
+  it('37. admin1 deletes T1/replies/R1 SUCCEEDS', async () => {
+    const db = testEnv.authenticatedContext('admin1').firestore();
+    await assertSucceeds(deleteDoc(doc(db, 'threads', 'T1', 'replies', 'R1')));
+  });
+});
+
 describe('Firestore security rules — volunteerHours self-logging', () => {
   const hoursDoc = (memberId: string, recordedBy: string) => ({
     memberId,

@@ -81,3 +81,20 @@ export interface OrgSettings {
   duesBySize?: Record<string, number>;
   contactEmail: string;
 }
+
+export interface ForumThread {
+  id: string;
+  title: string;
+  body: string;
+  authorId: string;
+  authorName: string;
+  createdAt: Timestamp;
+}
+
+export interface ForumReply {
+  id: string;
+  body: string;
+  authorId: string;
+  authorName: string;
+  createdAt: Timestamp;
+}

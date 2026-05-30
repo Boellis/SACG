@@ -51,5 +51,16 @@ service cloud.firestore {
       allow read, delete: if isAdmin();
       allow create: if isAdmin();
     }
+
+    match /threads/{id} {
+      allow read: if isActive() || isAdmin();
+      allow create: if isActive() && request.resource.data.authorId == request.auth.uid;
+      allow update, delete: if isAdmin() || (isActive() && resource.data.authorId == request.auth.uid);
+      match /replies/{rid} {
+        allow read: if isActive() || isAdmin();
+        allow create: if isActive() && request.resource.data.authorId == request.auth.uid;
+        allow update, delete: if isAdmin() || (isActive() && resource.data.authorId == request.auth.uid);
+      }
+    }
   }
 }

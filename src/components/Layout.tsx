@@ -13,6 +13,7 @@ const memberNavItems: NavItem[] = [
   { to: '/plots', label: 'Plots' },
   { to: '/calendar', label: 'Calendar' },
   { to: '/my-hours', label: 'My Hours' },
+  { to: '/forum', label: 'Message Board' },
 ];
 
 const adminNavItems: NavItem[] = [

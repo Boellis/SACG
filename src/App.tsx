@@ -15,6 +15,8 @@ import Dashboard from './features/dashboard/Dashboard';
 import CalendarPage from './features/calendar/CalendarPage';
 import SettingsPage from './features/settings/SettingsPage';
 import EmailPage from './features/email/EmailPage';
+import ForumPage from './features/forum/ForumPage';
+import ThreadPage from './features/forum/ThreadPage';
 
 export default function App() {
   return (
@@ -30,6 +32,8 @@ export default function App() {
               <Route path="/plots/:id" element={<PlotDetail />} />
               <Route path="/calendar" element={<CalendarPage />} />
               <Route path="/my-hours" element={<MyHoursPage />} />
+              <Route path="/forum" element={<ForumPage />} />
+              <Route path="/forum/:threadId" element={<ThreadPage />} />
               <Route element={<RequireAdmin />}>
                 <Route path="/members" element={<MembersPage />} />
                 <Route path="/members/:id" element={<MemberDetail />} />
