@@ -6,3 +6,11 @@ export function groupByNumber(plots: Plot[]) {
   for (const p of plots) { const a = m.get(p.number) ?? []; a.push(p); m.set(p.number, a); }
   return m;
 }
+
+export type Occupancy = 'empty' | 'partial' | 'full';
+export function plotOccupancy(units: Plot[]): Occupancy {
+  const occupied = units.filter((p) => p.status === 'assigned').length;
+  if (occupied === 0) return 'empty';
+  if (occupied === units.length) return 'full';
+  return 'partial';
+}

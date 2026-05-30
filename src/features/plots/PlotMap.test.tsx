@@ -122,56 +122,59 @@ describe('PlotMap', () => {
     expect(screen.getByText('Bob Jones')).toBeInTheDocument();
   });
 
-  it('uses data-status="available" for available plot', () => {
+  it('uses data-occupancy="empty" for a whole available plot', () => {
     render(
       <MemoryRouter>
         <PlotMap plots={fixture} />
       </MemoryRouter>,
     );
 
-    const buttons = document.querySelectorAll('[data-status]');
-    const statusMap = new Map<string, string>();
+    const buttons = document.querySelectorAll('[data-occupancy]');
+    const occupancyMap = new Map<string, string>();
     buttons.forEach((btn) => {
       const id = btn.querySelector('div')?.textContent;
-      if (id) statusMap.set(id, btn.getAttribute('data-status') ?? '');
+      if (id) occupancyMap.set(id, btn.getAttribute('data-occupancy') ?? '');
     });
 
-    expect(statusMap.get('5')).toBe('available');
-    expect(statusMap.get('7B')).toBe('available');
+    // Plot 5 is a whole available plot → empty
+    expect(occupancyMap.get('5')).toBe('empty');
   });
 
-  it('uses data-status="paid" for assigned+duesPaid plot', () => {
+  it('uses data-occupancy="full" for a whole assigned plot', () => {
     render(
       <MemoryRouter>
         <PlotMap plots={fixture} />
       </MemoryRouter>,
     );
 
-    const buttons = document.querySelectorAll('[data-status]');
-    const statusMap = new Map<string, string>();
+    const buttons = document.querySelectorAll('[data-occupancy]');
+    const occupancyMap = new Map<string, string>();
     buttons.forEach((btn) => {
       const id = btn.querySelector('div')?.textContent;
-      if (id) statusMap.set(id, btn.getAttribute('data-status') ?? '');
+      if (id) occupancyMap.set(id, btn.getAttribute('data-occupancy') ?? '');
     });
 
-    expect(statusMap.get('3')).toBe('paid');
+    // Plot 3 is a whole assigned plot → full
+    expect(occupancyMap.get('3')).toBe('full');
   });
 
-  it('uses data-status="unpaid" for assigned+!duesPaid plot', () => {
+  it('uses data-occupancy="partial" for both halves of a split plot where only one half is assigned', () => {
     render(
       <MemoryRouter>
         <PlotMap plots={fixture} />
       </MemoryRouter>,
     );
 
-    const buttons = document.querySelectorAll('[data-status]');
-    const statusMap = new Map<string, string>();
+    const buttons = document.querySelectorAll('[data-occupancy]');
+    const occupancyMap = new Map<string, string>();
     buttons.forEach((btn) => {
       const id = btn.querySelector('div')?.textContent;
-      if (id) statusMap.set(id, btn.getAttribute('data-status') ?? '');
+      if (id) occupancyMap.set(id, btn.getAttribute('data-occupancy') ?? '');
     });
 
-    expect(statusMap.get('7A')).toBe('unpaid');
+    // Plot 7A is assigned but 7B is available → partial for both cells
+    expect(occupancyMap.get('7A')).toBe('partial');
+    expect(occupancyMap.get('7B')).toBe('partial');
   });
 
   it('renders both halves of a split plot (7A and 7B)', () => {
