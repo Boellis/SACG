@@ -3,7 +3,10 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Button, Card, Badge } from '../../components/ui';
 import { useAuth } from '../../auth/useAuth';
 import type { Plot } from '../../lib/types';
-import { listenPlot, updatePlot, toggleDuesPaid, toggleDepositPaid } from './plotsApi';
+import { listenPlot, updatePlot, toggleDuesPaid, toggleDepositPaid, unassignPlot, splitPlot } from './plotsApi';
+import { splitPlotIds } from '../../logic/plots';
+import AssignPlotModal from './AssignPlotModal';
+import CropsEditor from './CropsEditor';
 
 function PaidBadge({ paid }: { paid: boolean }) {
   return paid ? <Badge color="green">Paid</Badge> : <Badge color="amber">Unpaid</Badge>;
@@ -26,6 +29,7 @@ export default function PlotDetail() {
 
   const [plot, setPlot] = useState<Plot | null | undefined>(undefined); // undefined = loading
   const [editing, setEditing] = useState(false);
+  const [assignOpen, setAssignOpen] = useState(false);
 
   // Edit form state
   const [editSize, setEditSize] = useState('');
@@ -191,22 +195,61 @@ export default function PlotDetail() {
           )}
         </Card>
 
-        {/* Crops (read-only) */}
+        {/* Holder assignment (admin) */}
+        {role === 'admin' && (
+          <Card title="Holder">
+            {plot.holderMemberId ? (
+              <div className="space-y-3">
+                <p className="text-sm text-gray-800 font-medium">{plot.holderName}</p>
+                <div className="flex gap-2">
+                  <Button variant="secondary" className="text-xs" onClick={() => setAssignOpen(true)}>
+                    Reassign
+                  </Button>
+                  <Button
+                    variant="danger"
+                    className="text-xs"
+                    onClick={async () => {
+                      if (confirm('Unassign this plot holder?')) {
+                        await unassignPlot(plot.id);
+                      }
+                    }}
+                  >
+                    Unassign
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <Button className="text-xs" onClick={() => setAssignOpen(true)}>
+                Assign holder
+              </Button>
+            )}
+            {plot.half === 'whole' && (
+              <div className="mt-4 pt-4 border-t border-gray-100">
+                <Button
+                  variant="secondary"
+                  className="text-xs"
+                  onClick={async () => {
+                    if (confirm('Split this plot into A and B halves? This cannot be undone.')) {
+                      await splitPlot(plot);
+                      navigate('/plots/' + splitPlotIds(plot.number).a);
+                    }
+                  }}
+                >
+                  Split into A/B
+                </Button>
+              </div>
+            )}
+          </Card>
+        )}
+
+        {/* Crops */}
         <Card title="Crops">
-          {plot.crops.length === 0 ? (
-            <p className="text-sm text-gray-500">No crops recorded.</p>
-          ) : (
-            <ul className="space-y-1 text-sm">
-              {plot.crops.map((c, i) => (
-                <li key={i} className="flex justify-between">
-                  <span className="font-medium">{c.name}</span>
-                  {c.notes && <span className="text-gray-500">{c.notes}</span>}
-                </li>
-              ))}
-            </ul>
-          )}
-          {/* assign / split / crops editor added in a later task */}
+          <CropsEditor plot={plot} />
         </Card>
+
+        {assignOpen && (
+          <AssignPlotModal open={assignOpen} onClose={() => setAssignOpen(false)} plot={plot} />
+        )}
 
         {/* Admin: edit */}
         {role === 'admin' && (

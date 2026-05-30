@@ -2,11 +2,16 @@ import {
   onSnapshot,
   setDoc,
   updateDoc,
+  writeBatch,
+  doc,
   serverTimestamp,
   type Unsubscribe,
 } from 'firebase/firestore';
 import { plotsCol, plotDoc } from '../../data/collections';
-import type { Plot, PlotHalf } from '../../lib/types';
+import { db } from '../../lib/firebase';
+import type { Plot, PlotHalf, Member, Crop } from '../../lib/types';
+import { approveMember } from '../members/membersApi';
+import { splitPlotIds } from '../../logic/plots';
 
 export function listenPlots(cb: (plots: Plot[]) => void): Unsubscribe {
   return onSnapshot(plotsCol, (snap) => {
@@ -65,4 +70,51 @@ export async function toggleDepositPaid(id: string, paid: boolean): Promise<void
   await updateDoc(plotDoc(id), {
     depositPaid: paid,
   } as Record<string, unknown>);
+}
+
+export async function assignPlot(plot: Plot, member: Member): Promise<void> {
+  await updateDoc(plotDoc(plot.id), {
+    holderMemberId: member.id,
+    holderName: member.displayName,
+    status: 'assigned',
+  } as Record<string, unknown>);
+  if (member.status === 'pending') {
+    await approveMember(member.id);
+  }
+}
+
+export async function unassignPlot(plotId: string): Promise<void> {
+  await updateDoc(plotDoc(plotId), {
+    holderMemberId: null,
+    holderName: null,
+    status: 'available',
+  } as Record<string, unknown>);
+}
+
+export async function splitPlot(plot: Plot): Promise<void> {
+  const { a: aId, b: bId } = splitPlotIds(plot.number);
+  const batch = writeBatch(db);
+  const halfData = {
+    number: plot.number,
+    size: plot.size ?? '',
+    status: 'available' as const,
+    holderMemberId: null,
+    holderName: null,
+    duesAmount: plot.duesAmount,
+    depositAmount: plot.depositAmount,
+    duesPaid: false,
+    depositPaid: false,
+    season: plot.season,
+    crops: [],
+    mapPos: plot.mapPos ?? null,
+    notes: '',
+  };
+  batch.set(doc(db, 'plots', aId), { ...halfData, half: 'A' as PlotHalf });
+  batch.set(doc(db, 'plots', bId), { ...halfData, half: 'B' as PlotHalf });
+  batch.delete(doc(db, 'plots', plot.id));
+  await batch.commit();
+}
+
+export async function setCrops(plotId: string, crops: Crop[]): Promise<void> {
+  await updateDoc(plotDoc(plotId), { crops } as Record<string, unknown>);
 }
