@@ -11,6 +11,7 @@ import MembersPage from './features/members/MembersPage';
 import WaitlistPage from './features/members/WaitlistPage';
 import MemberDetail from './features/members/MemberDetail';
 import DuesPage from './features/dues/DuesPage';
+import Dashboard from './features/dashboard/Dashboard';
 
 export default function App() {
   return (
@@ -21,7 +22,7 @@ export default function App() {
           <Route path="/signup" element={<SignUp />} />
           <Route element={<RequireAuth />}>
             <Route element={<Layout />}>
-              <Route path="/" element={<Placeholder title="Dashboard" />} />
+              <Route path="/" element={<Dashboard />} />
               <Route path="/plots" element={<PlotsPage />} />
               <Route path="/plots/:id" element={<PlotDetail />} />
               <Route path="/calendar" element={<Placeholder title="Calendar" />} />
