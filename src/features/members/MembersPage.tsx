@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Badge, Card, Table, Th, Td, Field } from '../../components/ui';
+import { Badge, Button, Card, Table, Th, Td, Field } from '../../components/ui';
 import type { Member, Plot, Role, MemberStatus } from '../../lib/types';
 import { listenMembers } from './membersApi';
 import { listenPlots } from '../plots/plotsApi';
+import { paginate } from '../../logic/pagination';
+
+const PAGE_SIZE = 10;
 
 function RoleBadge({ role }: { role: Role }) {
   return <Badge color={role === 'admin' ? 'blue' : 'gray'}>{role}</Badge>;
@@ -23,6 +26,7 @@ export default function MembersPage() {
   const [plots, setPlots] = useState<Plot[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
 
   useEffect(() => {
     let membersLoaded = false;
@@ -57,6 +61,10 @@ export default function MembersPage() {
       m.email.toLowerCase().includes(q),
   );
 
+  // Show one page at a time. paginate() clamps `page` into range, so a stale
+  // page (e.g. after the list shrinks) still renders the nearest valid page.
+  const result = paginate(filtered, page, PAGE_SIZE);
+
   function plotsForMember(memberId: string): Plot[] {
     return plots.filter((p) => p.holderMemberId === memberId);
   }
@@ -78,7 +86,10 @@ export default function MembersPage() {
             label="Search"
             placeholder="Name or email…"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setPage(1); // jump back to the first page of new results
+            }}
           />
         </div>
       </div>
@@ -90,48 +101,75 @@ export default function MembersPage() {
           </p>
         </Card>
       ) : (
-        <Table>
-          <thead>
-            <tr>
-              <Th>Name</Th>
-              <Th>Email</Th>
-              <Th>Role</Th>
-              <Th>Status</Th>
-              <Th>Plots</Th>
-              <Th>Hours</Th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((m) => {
-              const memberPlots = plotsForMember(m.id);
-              return (
-                <tr key={m.id}>
-                  <Td>
-                    <Link
-                      to={`/members/${m.id}`}
-                      className="text-garden-700 hover:underline font-medium"
-                    >
-                      {m.displayName}
-                    </Link>
-                  </Td>
-                  <Td>{m.email}</Td>
-                  <Td>
-                    <RoleBadge role={m.role} />
-                  </Td>
-                  <Td>
-                    <StatusBadge status={m.status} />
-                  </Td>
-                  <Td>
-                    {memberPlots.length === 0
-                      ? <span className="text-gray-400">—</span>
-                      : memberPlots.map((p) => p.id).join(', ')}
-                  </Td>
-                  <Td>{m.currentYearHours}</Td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </Table>
+        <>
+          <Table>
+            <thead>
+              <tr>
+                <Th>Name</Th>
+                <Th>Email</Th>
+                <Th>Role</Th>
+                <Th>Status</Th>
+                <Th>Plots</Th>
+                <Th>Hours</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {result.items.map((m) => {
+                const memberPlots = plotsForMember(m.id);
+                return (
+                  <tr key={m.id}>
+                    <Td>
+                      <Link
+                        to={`/members/${m.id}`}
+                        className="text-garden-700 hover:underline font-medium"
+                      >
+                        {m.displayName}
+                      </Link>
+                    </Td>
+                    <Td>{m.email}</Td>
+                    <Td>
+                      <RoleBadge role={m.role} />
+                    </Td>
+                    <Td>
+                      <StatusBadge status={m.status} />
+                    </Td>
+                    <Td>
+                      {memberPlots.length === 0
+                        ? <span className="text-gray-400">—</span>
+                        : memberPlots.map((p) => p.id).join(', ')}
+                    </Td>
+                    <Td>{m.currentYearHours}</Td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </Table>
+
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-gray-600">
+              Showing {result.startIndex}–{result.endIndex} of {result.total} members
+            </p>
+            <div className="flex items-center gap-3">
+              <Button
+                variant="secondary"
+                onClick={() => setPage(result.page - 1)}
+                disabled={!result.hasPrev}
+              >
+                Previous
+              </Button>
+              <span className="text-sm text-gray-600">
+                Page {result.page} of {result.pageCount}
+              </span>
+              <Button
+                variant="secondary"
+                onClick={() => setPage(result.page + 1)}
+                disabled={!result.hasNext}
+              >
+                Next
+              </Button>
+            </div>
+          </div>
+        </>
       )}
     </div>
   );
