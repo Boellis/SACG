@@ -394,12 +394,19 @@ function EventFormModal({ initial, createdBy, onClose }: EventFormProps) {
           onChange={(e) => set('location', e.target.value)}
           placeholder="Community Garden"
         />
-        <Field
-          label="Description (optional)"
-          value={form.description}
-          onChange={(e) => set('description', e.target.value)}
-          placeholder="Details…"
-        />
+        <div className="flex flex-col gap-1">
+          <label htmlFor="event-description" className="text-sm font-medium text-gray-700">
+            Description — what's happening at this event?
+          </label>
+          <textarea
+            id="event-description"
+            className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-garden-500"
+            rows={5}
+            value={form.description}
+            onChange={(e) => set('description', e.target.value)}
+            placeholder="e.g. We'll weed the common beds and turn the compost. Bring gloves & water — snacks provided!"
+          />
+        </div>
         {error && <p className="text-xs text-red-600">{error}</p>}
         <div className="flex gap-2 pt-1">
           <Button type="submit" disabled={saving} className="flex-1">
