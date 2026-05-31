@@ -187,4 +187,45 @@ describe('PlotMap', () => {
     expect(screen.getByText('7A')).toBeInTheDocument();
     expect(screen.getByText('7B')).toBeInTheDocument();
   });
+
+  // A whole roster: numbers 1–33 with 9 split plots → 42 plot docs.
+  function fullRoster(): Plot[] {
+    const splits = new Set([9, 13, 14, 16, 18, 25, 26, 27, 30]);
+    const mk = (id: string, number: number, half: 'whole' | 'A' | 'B'): Plot => ({
+      id, number, half, status: 'available', duesAmount: 35, depositAmount: 25,
+      duesPaid: false, depositPaid: false, season: '2026', crops: [],
+    });
+    const out: Plot[] = [];
+    for (let n = 1; n <= 33; n++) {
+      if (splits.has(n)) { out.push(mk(`${n}A`, n, 'A')); out.push(mk(`${n}B`, n, 'B')); }
+      else out.push(mk(`${n}`, n, 'whole'));
+    }
+    return out;
+  }
+
+  it('renders every plot when none have a map position (42-plot roster)', () => {
+    const plots = fullRoster();
+    expect(plots).toHaveLength(42);
+    render(
+      <MemoryRouter>
+        <PlotMap plots={plots} />
+      </MemoryRouter>,
+    );
+    expect(document.querySelectorAll('[data-occupancy]')).toHaveLength(42);
+  });
+
+  it('still renders unpositioned plots when some plots have a map position', () => {
+    const plots = fullRoster();
+    plots[0].mapPos = { row: 0, col: 0 };
+    plots[1].mapPos = { row: 0, col: 1 };
+    plots[2].mapPos = { row: 1, col: 0 };
+    render(
+      <MemoryRouter>
+        <PlotMap plots={plots} />
+      </MemoryRouter>,
+    );
+    // 3 placed in the grid + 39 under "Unplaced" = all 42 still shown.
+    expect(document.querySelectorAll('[data-occupancy]')).toHaveLength(42);
+    expect(screen.getByText(/Unplaced plots/)).toBeInTheDocument();
+  });
 });
