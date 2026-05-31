@@ -8,8 +8,11 @@ import {
   setRsvp,
   listenRsvps,
 } from './eventsApi';
+import { listenMembers } from '../members/membersApi';
+import { buildGmailComposeUrl, buildMailtoUrl } from '../../lib/emailLinks';
+import { activeMemberEmails, dedupeEmails } from '../../logic/emailAudience';
 import { Button, Card, Badge, Modal, Field } from '../../components/ui';
-import type { GardenEvent, Rsvp, EventType, RsvpStatus } from '../../lib/types';
+import type { GardenEvent, Member, Rsvp, EventType, RsvpStatus } from '../../lib/types';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -97,9 +100,36 @@ interface EventModalProps {
   isAdmin: boolean;
   memberId: string;
   memberDisplayName: string;
+  members: Member[];
 }
 
-function EventModal({ event, onClose, onEdit, isAdmin, memberId, memberDisplayName }: EventModalProps) {
+function buildEmailBody(event: GardenEvent): string {
+  const start = event.start.toDate();
+  const end = event.end.toDate();
+  const label = typeLabel(event.type);
+
+  let datePart: string;
+  if (event.allDay) {
+    datePart = start.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  } else {
+    const startStr = start.toLocaleString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+    const endStr = end.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    datePart = `${startStr}–${endStr}`;
+  }
+
+  const lines: string[] = [];
+  lines.push(`${label} — ${datePart}`);
+  if (event.location) lines.push(`Location: ${event.location}`);
+  lines.push('');
+  if (event.description) {
+    lines.push(event.description);
+    lines.push('');
+  }
+  lines.push('See the SACG calendar: https://sacg-garden-app.web.app/calendar');
+  return lines.join('\n');
+}
+
+function EventModal({ event, onClose, onEdit, isAdmin, memberId, memberDisplayName, members }: EventModalProps) {
   const [rsvps, setRsvps] = useState<Rsvp[]>([]);
   const [saving, setSaving] = useState(false);
 
@@ -144,6 +174,12 @@ function EventModal({ event, onClose, onEdit, isAdmin, memberId, memberDisplayNa
     );
   };
 
+  const recipientEmails = dedupeEmails(activeMemberEmails(members));
+  const emailSubject = event.title;
+  const emailBody = buildEmailBody(event);
+  const gmailUrl = buildGmailComposeUrl(recipientEmails, emailSubject, emailBody);
+  const mailtoUrl = buildMailtoUrl(recipientEmails, emailSubject, emailBody);
+
   return (
     <Modal open onClose={onClose} title={event.title}>
       <div className="space-y-3 text-sm">
@@ -184,6 +220,31 @@ function EventModal({ event, onClose, onEdit, isAdmin, memberId, memberDisplayNa
                 </div>
               );
             })}
+          </div>
+        )}
+
+        {/* Admin: email all members */}
+        {isAdmin && (
+          <div className="border-t border-gray-100 pt-3 space-y-1">
+            <Button
+              variant="secondary"
+              disabled={recipientEmails.length === 0}
+              onClick={() => window.open(gmailUrl, '_blank')}
+              className="w-full"
+            >
+              Email all members about this event
+            </Button>
+            {recipientEmails.length > 0 && (
+              <p className="text-xs text-gray-500 text-center">
+                Opens your email composer; members are BCC'd.{' '}
+                <a href={mailtoUrl} className="underline text-garden-700 hover:text-garden-900" target="_blank" rel="noreferrer">
+                  Use mail app instead
+                </a>
+              </p>
+            )}
+            {recipientEmails.length === 0 && (
+              <p className="text-xs text-gray-400 text-center">No active members to email.</p>
+            )}
           </div>
         )}
 
@@ -362,6 +423,7 @@ export default function CalendarPage() {
   const isAdmin = role === 'admin';
 
   const [events, setEvents] = useState<GardenEvent[]>([]);
+  const [members, setMembers] = useState<Member[]>([]);
   const [loading, setLoading] = useState(true);
 
   const today = new Date();
@@ -377,6 +439,11 @@ export default function CalendarPage() {
       setEvents(evs);
       setLoading(false);
     });
+    return unsub;
+  }, []);
+
+  useEffect(() => {
+    const unsub = listenMembers(setMembers);
     return unsub;
   }, []);
 
@@ -484,23 +551,32 @@ export default function CalendarPage() {
               <ul className="space-y-3">
                 {upcoming.map((ev) => (
                   <li key={ev.id}>
-                    <button
-                      className="w-full text-left group"
-                      onClick={() => setSelectedEvent(ev)}
-                    >
-                      <div className="flex items-start gap-3">
-                        <div className="flex-shrink-0 mt-0.5">
-                          <Badge color={typeColor(ev.type)}>{typeLabel(ev.type)}</Badge>
-                        </div>
-                        <div>
+                    <div className="flex items-start gap-3">
+                      <div className="flex-shrink-0 mt-0.5">
+                        <Badge color={typeColor(ev.type)}>{typeLabel(ev.type)}</Badge>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <button
+                          className="text-left group"
+                          onClick={() => setSelectedEvent(ev)}
+                        >
                           <p className="font-medium text-gray-800 group-hover:underline">{ev.title}</p>
                           <p className="text-xs text-gray-500">{formatDateTime(ev)}</p>
                           {ev.location && (
                             <p className="text-xs text-gray-400">{ev.location}</p>
                           )}
-                        </div>
+                        </button>
                       </div>
-                    </button>
+                      <div className="flex-shrink-0">
+                        <Button
+                          variant="secondary"
+                          onClick={() => setSelectedEvent(ev)}
+                          className="text-xs py-1 px-2"
+                        >
+                          Details
+                        </Button>
+                      </div>
+                    </div>
                   </li>
                 ))}
               </ul>
@@ -518,6 +594,7 @@ export default function CalendarPage() {
           isAdmin={isAdmin}
           memberId={member.id}
           memberDisplayName={member.displayName}
+          members={members}
         />
       )}
 

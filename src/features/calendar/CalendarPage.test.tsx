@@ -13,6 +13,11 @@ vi.mock('./eventsApi', () => ({
   setRsvp: vi.fn().mockResolvedValue(undefined),
 }));
 
+// Mock membersApi
+vi.mock('../members/membersApi', () => ({
+  listenMembers: vi.fn(),
+}));
+
 // Mock useAuth
 vi.mock('../../auth/useAuth', () => ({
   useAuth: vi.fn(),
@@ -36,12 +41,14 @@ vi.mock('../../lib/firebase', () => ({
 }));
 
 import * as eventsApiMod from './eventsApi';
+import * as membersApiMod from '../members/membersApi';
 import * as useAuthMod from '../../auth/useAuth';
 import CalendarPage from './CalendarPage';
 
 const mockedListenEvents = vi.mocked(eventsApiMod.listenEvents);
 const mockedListenRsvps = vi.mocked(eventsApiMod.listenRsvps);
 const mockedSetRsvp = vi.mocked(eventsApiMod.setRsvp);
+const mockedListenMembers = vi.mocked(membersApiMod.listenMembers);
 const mockedUseAuth = vi.mocked(useAuthMod.useAuth);
 
 /** Build a fake GardenEvent fixture */
@@ -53,6 +60,7 @@ function makeEvent(overrides: Partial<{
   endDate: Date;
   allDay: boolean;
   location: string;
+  description: string;
 }> = {}) {
   const startDate = overrides.startDate ?? new Date(Date.now() + 3 * 24 * 60 * 60 * 1000); // 3 days from now
   const endDate = overrides.endDate ?? new Date(startDate.getTime() + 2 * 60 * 60 * 1000);
@@ -64,6 +72,7 @@ function makeEvent(overrides: Partial<{
     end: { toDate: () => endDate } as unknown as Timestamp,
     allDay: overrides.allDay ?? false,
     location: overrides.location,
+    description: overrides.description,
     createdBy: 'admin-uid',
   };
 }
@@ -82,6 +91,13 @@ function makeMember(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/** 2 active members + 1 pending — fixture for email tests */
+const memberFixtures = [
+  makeMember({ id: 'active-1', email: 'alice@test.com', displayName: 'Alice', status: 'active' }),
+  makeMember({ id: 'active-2', email: 'bob@test.com', displayName: 'Bob', status: 'active' }),
+  makeMember({ id: 'pending-1', email: 'pending@test.com', displayName: 'Pending User', status: 'pending' }),
+];
+
 describe('CalendarPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -98,6 +114,12 @@ describe('CalendarPage', () => {
     // Default: listenRsvps yields empty
     mockedListenRsvps.mockImplementation((_eventId, cb) => {
       cb([]);
+      return vi.fn();
+    });
+
+    // Default: listenMembers yields fixture members
+    mockedListenMembers.mockImplementation((cb) => {
+      cb(memberFixtures as any);
       return vi.fn();
     });
   });
@@ -285,5 +307,159 @@ describe('CalendarPage', () => {
     // Should contain something like "2 yes"
     expect(texts.some((t) => t?.includes('yes'))).toBe(true);
     expect(texts.some((t) => t?.includes('no'))).toBe(true);
+  });
+
+  // --- New tests for Details button and admin email ---
+
+  it('renders a "Details" button for each upcoming event', () => {
+    const fixture = makeEvent({ title: 'Upcoming Garden Event' });
+
+    mockedListenEvents.mockImplementation((cb) => {
+      cb([fixture] as any);
+      return vi.fn();
+    });
+
+    render(
+      <MemoryRouter>
+        <CalendarPage />
+      </MemoryRouter>,
+    );
+
+    const detailsBtn = screen.getByRole('button', { name: /^details$/i });
+    expect(detailsBtn).toBeInTheDocument();
+  });
+
+  it('"Details" button opens the event modal with the event title', async () => {
+    const fixture = makeEvent({ title: 'Details Button Test Event', description: 'A great event' });
+
+    mockedListenEvents.mockImplementation((cb) => {
+      cb([fixture] as any);
+      return vi.fn();
+    });
+
+    render(
+      <MemoryRouter>
+        <CalendarPage />
+      </MemoryRouter>,
+    );
+
+    const detailsBtn = screen.getByRole('button', { name: /^details$/i });
+    fireEvent.click(detailsBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText('RSVP')).toBeInTheDocument();
+    });
+
+    // Modal should show the event title as heading
+    const headings = screen.getAllByText('Details Button Test Event');
+    expect(headings.length).toBeGreaterThanOrEqual(1);
+
+    // Description should also be visible
+    expect(screen.getByText('A great event')).toBeInTheDocument();
+  });
+
+  it('admin sees "Email all members about this event" button in detail modal', async () => {
+    mockedUseAuth.mockReturnValue({
+      user: { uid: 'admin-uid' } as any,
+      member: makeMember({ id: 'admin-uid', role: 'admin' }) as any,
+      role: 'admin',
+      status: 'active',
+      loading: false,
+    });
+
+    const fixture = makeEvent({ title: 'Admin Email Test Event' });
+
+    mockedListenEvents.mockImplementation((cb) => {
+      cb([fixture] as any);
+      return vi.fn();
+    });
+
+    render(
+      <MemoryRouter>
+        <CalendarPage />
+      </MemoryRouter>,
+    );
+
+    // Open modal via Details button
+    fireEvent.click(screen.getByRole('button', { name: /^details$/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('RSVP')).toBeInTheDocument();
+    });
+
+    expect(screen.getByRole('button', { name: /email all members about this event/i })).toBeInTheDocument();
+  });
+
+  it('admin email button opens Gmail URL with event title and active members BCC (not pending)', async () => {
+    mockedUseAuth.mockReturnValue({
+      user: { uid: 'admin-uid' } as any,
+      member: makeMember({ id: 'admin-uid', role: 'admin' }) as any,
+      role: 'admin',
+      status: 'active',
+      loading: false,
+    });
+
+    const fixture = makeEvent({ title: 'Spring Harvest Fest' });
+
+    mockedListenEvents.mockImplementation((cb) => {
+      cb([fixture] as any);
+      return vi.fn();
+    });
+
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+
+    render(
+      <MemoryRouter>
+        <CalendarPage />
+      </MemoryRouter>,
+    );
+
+    // Open modal
+    fireEvent.click(screen.getByRole('button', { name: /^details$/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /email all members about this event/i })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /email all members about this event/i }));
+
+    expect(openSpy).toHaveBeenCalledTimes(1);
+    const calledUrl = openSpy.mock.calls[0][0] as string;
+
+    // URL should contain the event title (encoded)
+    expect(calledUrl).toContain(encodeURIComponent('Spring Harvest Fest'));
+
+    // URL should contain alice and bob's emails (active members)
+    expect(calledUrl).toContain(encodeURIComponent('alice@test.com'));
+    expect(calledUrl).toContain(encodeURIComponent('bob@test.com'));
+
+    // URL should NOT contain the pending member's email
+    expect(calledUrl).not.toContain(encodeURIComponent('pending@test.com'));
+
+    openSpy.mockRestore();
+  });
+
+  it('non-admin member does NOT see "Email all members" button in detail modal', async () => {
+    // Already member by default
+    const fixture = makeEvent({ title: 'Member Only Test Event' });
+
+    mockedListenEvents.mockImplementation((cb) => {
+      cb([fixture] as any);
+      return vi.fn();
+    });
+
+    render(
+      <MemoryRouter>
+        <CalendarPage />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^details$/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('RSVP')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByRole('button', { name: /email all members about this event/i })).not.toBeInTheDocument();
   });
 });
