@@ -160,6 +160,10 @@ export default function Plot3DLayout({
   readOnly = false,
 }) {
   const { w, d } = effectivePlot(widthFt, depthFt, half)
+  // Buildable ground is a generous square (>= 75ft) so beds never hang off the
+  // edge; the actual w×d plot is outlined on top of it (see below) so the real
+  // plot size still reads at true scale.
+  const ground = Math.max(75, Math.ceil(Math.max(w, d) * 1.5))
   const [shapes, setShapes] = useState(() => deserializeLayout(initialLayout))
   const [selectedId, setSelectedId] = useState(null)
   const [dragging, setDragging] = useState(false)
@@ -167,7 +171,7 @@ export default function Plot3DLayout({
   const [dirty, setDirty] = useState(false)
   const [showHelp, setShowHelp] = useState(true)
 
-  const soil = useSoilTexture(Math.max(1, Math.round(w / 2)), Math.max(1, Math.round(d / 2)))
+  const soil = useSoilTexture(Math.max(1, Math.round(ground / 2)), Math.max(1, Math.round(ground / 2)))
   const selected = shapes.find((s) => s.id === selectedId) || null
 
   const mutate = (fn) => { setShapes((prev) => fn(prev)); setDirty(true) }
@@ -252,23 +256,43 @@ export default function Plot3DLayout({
 
               {/* grass surround */}
               <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.02, 0]} receiveShadow>
-                <planeGeometry args={[w * 3, d * 1.5]} />
+                <planeGeometry args={[ground * 1.6, ground * 1.6]} />
                 <meshStandardMaterial color="#5c8a3a" roughness={1} />
               </mesh>
 
-              {/* plot soil */}
+              {/* buildable soil ground — a big square so beds don't extend past it */}
               <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]} receiveShadow onPointerDown={() => setSelectedId(null)}>
-                <planeGeometry args={[w, d]} />
+                <planeGeometry args={[ground, ground]} />
                 <meshStandardMaterial map={soil} roughness={1} />
               </mesh>
 
-              {/* 1 ft measurement grid */}
+              {/* 1 ft measurement grid across the ground */}
               <Grid
-                args={[w, d]}
+                args={[ground, ground]}
                 cellSize={1} cellThickness={0.6} cellColor="#3f6212"
                 sectionSize={5} sectionThickness={1.1} sectionColor="#365314"
-                position={[0, 0.005, 0]} infiniteGrid={false} fadeDistance={Math.max(w, d) * 4}
+                position={[0, 0.005, 0]} infiniteGrid={false} fadeDistance={ground * 4}
               />
+
+              {/* the actual plot footprint (w×d), outlined to scale on the larger ground */}
+              <group position={[0, 0.03, 0]}>
+                <mesh position={[-w / 2, 0, 0]} castShadow>
+                  <boxGeometry args={[0.12, 0.06, d]} />
+                  <meshStandardMaterial color="#e7d8b0" roughness={0.9} />
+                </mesh>
+                <mesh position={[w / 2, 0, 0]} castShadow>
+                  <boxGeometry args={[0.12, 0.06, d]} />
+                  <meshStandardMaterial color="#e7d8b0" roughness={0.9} />
+                </mesh>
+                <mesh position={[0, 0, -d / 2]} castShadow>
+                  <boxGeometry args={[w, 0.06, 0.12]} />
+                  <meshStandardMaterial color="#e7d8b0" roughness={0.9} />
+                </mesh>
+                <mesh position={[0, 0, d / 2]} castShadow>
+                  <boxGeometry args={[w, 0.06, 0.12]} />
+                  <meshStandardMaterial color="#e7d8b0" roughness={0.9} />
+                </mesh>
+              </group>
 
               {shapes.map((s) => (
                 <GardenShape3D
