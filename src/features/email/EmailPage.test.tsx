@@ -1,10 +1,16 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 
 // Mock membersApi so no Firestore calls happen
 vi.mock('../members/membersApi', () => ({
   listenMembers: vi.fn(),
+}));
+
+// Mock mailApi so no Firestore collection refs are constructed at import time
+vi.mock('./mailApi', () => ({
+  enqueueIndividualEmails: vi.fn().mockResolvedValue(2),
+  listenRecentMail: vi.fn(() => vi.fn()),
 }));
 
 // Mock useAuth to return an admin user
@@ -16,9 +22,11 @@ vi.mock('../../auth/useAuth', () => ({
 vi.mock('firebase/firestore', () => ({}));
 
 import * as membersApiMod from '../members/membersApi';
+import * as mailApiMod from './mailApi';
 import EmailPage from './EmailPage';
 
 const mockedListenMembers = vi.mocked(membersApiMod.listenMembers);
+const mockedEnqueue = vi.mocked(mailApiMod.enqueueIndividualEmails);
 
 // Fixture members: 2 active + 1 pending
 const fixtureMembers = [
@@ -137,5 +145,37 @@ describe('EmailPage', () => {
       </MemoryRouter>,
     );
     expect(screen.getByText(/recipients are bcc/i)).toBeInTheDocument();
+  });
+
+  it('queues one individual email per active recipient on "Send individually"', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    render(
+      <MemoryRouter>
+        <EmailPage />
+      </MemoryRouter>,
+    );
+
+    fireEvent.change(screen.getByLabelText(/subject/i), { target: { value: 'Hi {firstName}' } });
+    fireEvent.click(screen.getByRole('button', { name: /send individually/i }));
+
+    await waitFor(() => expect(mockedEnqueue).toHaveBeenCalledTimes(1));
+    const [recipients, subject] = mockedEnqueue.mock.calls[0];
+    // Only the 2 active members (Alice, Bob) — pending Charlie excluded
+    expect(recipients.map((r) => r.email)).toEqual(['alice@example.com', 'bob@example.com']);
+    expect(subject).toBe('Hi {firstName}');
+    confirmSpy.mockRestore();
+  });
+
+  it('does not queue emails if the send is not confirmed', () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    render(
+      <MemoryRouter>
+        <EmailPage />
+      </MemoryRouter>,
+    );
+    fireEvent.change(screen.getByLabelText(/subject/i), { target: { value: 'Hello' } });
+    fireEvent.click(screen.getByRole('button', { name: /send individually/i }));
+    expect(mockedEnqueue).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
   });
 });

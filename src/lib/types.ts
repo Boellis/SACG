@@ -122,3 +122,18 @@ export interface ForumReply {
   authorName: string;
   createdAt: Timestamp;
 }
+
+// One queued email in the `mail` collection consumed by the Firebase
+// "Trigger Email" extension. One doc = one individually-delivered email.
+export interface MailMessage { subject: string; text?: string; html?: string; }
+export type MailDeliveryState = 'PENDING' | 'PROCESSING' | 'RETRY' | 'SUCCESS' | 'ERROR';
+export interface MailDoc {
+  id: string;
+  to: string[];
+  message: MailMessage;
+  toName?: string;        // recipient display name (our field; the extension ignores extras)
+  createdBy?: string | null;
+  createdAt?: Timestamp;
+  // Written back by the extension as it attempts delivery.
+  delivery?: { state?: MailDeliveryState; error?: string; attempts?: number };
+}

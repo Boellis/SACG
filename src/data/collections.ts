@@ -16,6 +16,10 @@ export const memberDoc = (id: string) => doc(db, 'members', id).withConverter(co
 export const plotDoc   = (id: string) => doc(db, 'plots', id).withConverter(conv<Plot>());
 export const settingsDoc = () => doc(db, 'settings', 'org');
 
+// `mail` docs don't follow the {id}-in-data convention (the Trigger Email
+// extension owns their shape), so this ref intentionally has no converter.
+export const mailCol = collection(db, 'mail');
+
 export const threadsCol = collection(db, 'threads').withConverter(conv<ForumThread>());
 export const threadDoc = (id: string) => doc(db, 'threads', id).withConverter(conv<ForumThread>());
 export const repliesCol = (threadId: string) => collection(db, 'threads', threadId, 'replies').withConverter(conv<ForumReply>());
