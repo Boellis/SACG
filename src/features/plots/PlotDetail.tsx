@@ -315,8 +315,8 @@ export default function PlotDetail() {
         >
           <PlotLayoutCard
             key={plot.id}
-            widthFt={8}
-            depthFt={50}
+            widthFt={6}
+            depthFt={25}
             half={plot.half !== 'whole'}
             layout={plot.layout3d ?? null}
             onSave={(l: PlotLayout3D) => setPlotLayout3d(plot.id, l)}
