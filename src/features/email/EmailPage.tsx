@@ -4,9 +4,13 @@ import { buildGmailComposeUrl, buildMailtoUrl } from '../../lib/emailLinks';
 import { enqueueIndividualEmails, listenRecentMail } from './mailApi';
 import { useAuth } from '../../auth/useAuth';
 import { Button, Card, Badge } from '../../components/ui';
+import { paginate } from '../../logic/pagination';
 import type { Member, MailDoc, MailDeliveryState } from '../../lib/types';
 
 type AudienceMode = 'all' | 'custom';
+
+const RECENT_MAIL_WINDOW = 200; // how many recent mail docs to load for the log
+const MAIL_PAGE_SIZE = 25; // rows per page in the Recent emails log
 
 function dedupeByEmail(members: Member[]): Member[] {
   const seen = new Set<string>();
@@ -41,9 +45,10 @@ export default function EmailPage() {
   const [sendMsg, setSendMsg] = useState('');
   const [sendError, setSendError] = useState('');
   const [recentMail, setRecentMail] = useState<MailDoc[]>([]);
+  const [mailPage, setMailPage] = useState(1);
 
   useEffect(() => listenMembers(setMembers), []);
-  useEffect(() => listenRecentMail(setRecentMail), []);
+  useEffect(() => listenRecentMail(setRecentMail, RECENT_MAIL_WINDOW), []);
 
   const activeMembers = members.filter((m) => m.status === 'active');
 
@@ -92,6 +97,7 @@ export default function EmailPage() {
 
   const gmailUrl = buildGmailComposeUrl(emails, subject, body);
   const mailtoUrl = buildMailtoUrl(emails, subject, body);
+  const mailResult = paginate(recentMail, mailPage, MAIL_PAGE_SIZE);
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
@@ -246,19 +252,47 @@ export default function EmailPage() {
         {recentMail.length === 0 ? (
           <p className="text-sm text-gray-500">No emails sent yet.</p>
         ) : (
-          <ul className="divide-y divide-gray-100">
-            {recentMail.map((d) => (
-              <li key={d.id} className="flex items-center gap-3 py-2">
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm text-gray-800 truncate">
-                    {d.message?.subject || <span className="text-gray-400">(no subject)</span>}
-                  </p>
-                  <p className="text-xs text-gray-500 truncate">{d.toName || d.to?.[0]}</p>
-                </div>
-                <DeliveryBadge state={d.delivery?.state} />
-              </li>
-            ))}
-          </ul>
+          <div className="space-y-3">
+            <ul className="divide-y divide-gray-100">
+              {mailResult.items.map((d) => (
+                <li key={d.id} className="flex items-center gap-3 py-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm text-gray-800 truncate">
+                      {d.message?.subject || <span className="text-gray-400">(no subject)</span>}
+                    </p>
+                    <p className="text-xs text-gray-500 truncate">{d.toName || d.to?.[0]}</p>
+                  </div>
+                  <DeliveryBadge state={d.delivery?.state} />
+                </li>
+              ))}
+            </ul>
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-gray-500">
+                Showing {mailResult.startIndex}–{mailResult.endIndex} of {mailResult.total}
+              </p>
+              <div className="flex items-center gap-3">
+                <Button
+                  variant="secondary"
+                  className="text-xs"
+                  onClick={() => setMailPage(mailResult.page - 1)}
+                  disabled={!mailResult.hasPrev}
+                >
+                  Previous
+                </Button>
+                <span className="text-xs text-gray-500">
+                  Page {mailResult.page} of {mailResult.pageCount}
+                </span>
+                <Button
+                  variant="secondary"
+                  className="text-xs"
+                  onClick={() => setMailPage(mailResult.page + 1)}
+                  disabled={!mailResult.hasNext}
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
+          </div>
         )}
       </Card>
     </div>
