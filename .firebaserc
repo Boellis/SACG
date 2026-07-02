@@ -1,1 +1,13 @@
-﻿{ "projects": { "default": "sacg-garden-app" } }
+{
+  "projects": {
+    "default": "sacg-garden-app"
+  },
+  "targets": {},
+  "etags": {
+    "sacg-garden-app": {
+      "extensionInstances": {
+        "firestore-send-email": "415cae9c47a8243638e7a491fdd43a1231d217ad203434b9b4c8f7c5bd533936"
+      }
+    }
+  }
+}
