@@ -32,7 +32,7 @@ vi.mock('../../data/collections', () => {
 });
 
 import * as firestoreMod from 'firebase/firestore';
-import { toggleDuesPaid, createPlot, toggleDepositPaid, setPlotLayout, setPlotLayout3d } from './plotsApi';
+import { toggleDuesPaid, createPlot, toggleDepositPaid, setPlotLayout, setPlotLayout3d, markPlotWatered } from './plotsApi';
 
 const mockedUpdateDoc = vi.mocked(firestoreMod.updateDoc);
 const mockedSetDoc = vi.mocked(firestoreMod.setDoc);
@@ -136,6 +136,17 @@ describe('plotsApi', () => {
       expect(mockedUpdateDoc).toHaveBeenCalledTimes(1);
       const patch = (mockedUpdateDoc.mock.calls[0] as unknown as [unknown, Record<string, unknown>])[1];
       expect(patch).toEqual({ layout3d: layout });
+    });
+  });
+
+  describe('markPlotWatered', () => {
+    it('calls updateDoc with lastWateredAt set to the server timestamp', async () => {
+      const fakeTs = { _type: 'serverTimestamp' };
+      mockedServerTimestamp.mockReturnValue(fakeTs as unknown as ReturnType<typeof firestoreMod.serverTimestamp>);
+      await markPlotWatered('1');
+      expect(mockedUpdateDoc).toHaveBeenCalledTimes(1);
+      const patch = (mockedUpdateDoc.mock.calls[0] as unknown as [unknown, Record<string, unknown>])[1];
+      expect(patch).toEqual({ lastWateredAt: fakeTs });
     });
   });
 });

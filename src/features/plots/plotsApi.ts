@@ -130,3 +130,8 @@ export async function setPlotLayout(plotId: string, layout: PlotLayout): Promise
 export async function setPlotLayout3d(plotId: string, layout: PlotLayout3D): Promise<void> {
   await updateDoc(plotDoc(plotId), { layout3d: layout } as Record<string, unknown>);
 }
+
+/** Log that the plot was just watered (server time; displayed in Central). */
+export async function markPlotWatered(plotId: string): Promise<void> {
+  await updateDoc(plotDoc(plotId), { lastWateredAt: serverTimestamp() } as Record<string, unknown>);
+}

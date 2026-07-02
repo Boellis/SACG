@@ -68,6 +68,7 @@ export interface Plot {
   mapPos?: { row: number; col: number };
   layout?: PlotLayout;
   layout3d?: PlotLayout3D;
+  lastWateredAt?: Timestamp;
   notes?: string;
 }
 

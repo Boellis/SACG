@@ -3,7 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Button, Card, Badge } from '../../components/ui';
 import { useAuth } from '../../auth/useAuth';
 import type { Plot, PlotLayout3D } from '../../lib/types';
-import { listenPlot, updatePlot, toggleDuesPaid, toggleDepositPaid, unassignPlot, splitPlot, setPlotLayout3d } from './plotsApi';
+import type { Timestamp } from 'firebase/firestore';
+import { listenPlot, updatePlot, toggleDuesPaid, toggleDepositPaid, unassignPlot, splitPlot, setPlotLayout3d, markPlotWatered } from './plotsApi';
 import { splitPlotIds } from '../../logic/plots';
 import AssignPlotModal from './AssignPlotModal';
 import CropsEditor from './CropsEditor';
@@ -12,6 +13,17 @@ import PlotLayoutEditor from './PlotLayoutEditor';
 // Lazy-loaded so the three.js / R3F bundle is code-split into its own chunk and
 // only fetched when a plot detail page is opened (keeps the main app bundle lean).
 const PlotLayoutCard = lazy(() => import('./layout3d/PlotLayoutCard'));
+
+/** Format a timestamp in South Austin's timezone (US Central). */
+function formatCentral(ts: Timestamp): string {
+  return (
+    ts.toDate().toLocaleString('en-US', {
+      timeZone: 'America/Chicago',
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    }) + ' CT'
+  );
+}
 
 function PaidBadge({ paid }: { paid: boolean }) {
   return paid ? <Badge color="green">Paid</Badge> : <Badge color="amber">Unpaid</Badge>;
@@ -42,6 +54,8 @@ export default function PlotDetail() {
   const [editNotes, setEditNotes] = useState('');
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
+  const [watering, setWatering] = useState(false);
+  const [waterError, setWaterError] = useState('');
 
   useEffect(() => {
     if (!id) return;
@@ -85,6 +99,19 @@ export default function PlotDetail() {
   async function handleToggleDeposit() {
     if (!plot) return;
     await toggleDepositPaid(plot.id, !plot.depositPaid);
+  }
+
+  async function handleWatered() {
+    if (!plot) return;
+    setWatering(true);
+    setWaterError('');
+    try {
+      await markPlotWatered(plot.id);
+    } catch (err) {
+      setWaterError(err instanceof Error ? err.message : 'Failed to log watering.');
+    } finally {
+      setWatering(false);
+    }
   }
 
   if (plot === undefined) {
@@ -250,6 +277,26 @@ export default function PlotDetail() {
         {/* Crops */}
         <Card title="Crops">
           <CropsEditor plot={plot} />
+        </Card>
+
+        {/* Watering */}
+        <Card title="Watering">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="text-sm">
+              <span className="text-gray-500">Last watered: </span>
+              <span className="font-medium text-gray-800">
+                {plot.lastWateredAt ? formatCentral(plot.lastWateredAt) : 'Not yet logged'}
+              </span>
+            </div>
+            {(role === 'admin' || plot.holderMemberId === member?.id) && (
+              <div className="flex flex-col items-end gap-1">
+                <Button className="text-xs" onClick={handleWatered} disabled={watering}>
+                  {watering ? 'Logging…' : '💧 I just watered my plants'}
+                </Button>
+                {waterError && <span className="text-xs text-red-600">{waterError}</span>}
+              </div>
+            )}
+          </div>
         </Card>
 
         {/* Plot Layout — existing 2D SVG editor + immersive 3D tool behind a toggle */}

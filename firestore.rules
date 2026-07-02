@@ -29,7 +29,7 @@ service cloud.firestore {
       allow create, delete: if isAdmin();
       allow update: if isAdmin() || (isActive()
         && resource.data.holderMemberId == request.auth.uid
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['crops', 'layout', 'layout3d']));
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['crops', 'layout', 'layout3d', 'lastWateredAt']));
     }
 
     match /events/{id} {
