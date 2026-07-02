@@ -25,6 +25,7 @@ import { deserializeLayout } from './layout3dModel'
 // Trivial to change; the east line always re-centers on Z=0 around it and the west
 // line's north end always aligns to the east line's north end (plot 1).
 export const RIGHT_MAX = 24
+const SHORT_MAX = 33 // highest plot number on the short (25–33) line
 
 const PLOT_WIDTH = 6                 // ft — the short side; runs along N–S (Z)
 const PLOT_DEPTH = 25                // ft — the long side; extends away from the path
@@ -45,11 +46,11 @@ const noop = () => {}
 /** World placement (center + Y-rotation) for a plot number. */
 function placement(number) {
   if (number <= RIGHT_MAX) {
-    // EAST line: depth extends +X. Rotate +90° so local +Z (depth) -> world +X.
-    return { centerX: CENTER_OFFSET_X, centerZ: (number - RIGHT_MID) * SLOT, rotationY: Math.PI / 2 }
+    // Plots 1–24 (long line): WEST side, depth extends -X. Centered on Z=0, plot 1 north.
+    return { centerX: -CENTER_OFFSET_X, centerZ: (number - RIGHT_MID) * SLOT, rotationY: -Math.PI / 2 }
   }
-  // WEST line: depth extends -X. Rotate -90° so local +Z (depth) -> world -X.
-  return { centerX: -CENTER_OFFSET_X, centerZ: NORTH_Z + (number - LEFT_START) * SLOT, rotationY: -Math.PI / 2 }
+  // Plots 25–33 (short line): EAST side, depth extends +X. North end = 33, running south to 25.
+  return { centerX: CENTER_OFFSET_X, centerZ: NORTH_Z + (SHORT_MAX - number) * SLOT, rotationY: Math.PI / 2 }
 }
 
 /** Collapse the flat plot list into one entry per number: { number, whole?, aHalf?, bHalf? }. */
@@ -211,8 +212,8 @@ function Tree({ position, scale = 1 }) {
 // Orchard trees scattered in the empty SW area (south of the short west line).
 // [x, z, scale]
 const ORCHARD = [
-  [-9, 32, 1.05], [-19, 39, 0.9], [-11, 51, 1.15], [-23, 57, 1.0],
-  [-8, 67, 0.95], [-18, 73, 1.1], [-13, 86, 1.0], [-24, 92, 0.9],
+  [9, 32, 1.05], [19, 39, 0.9], [11, 51, 1.15], [23, 57, 1.0],
+  [8, 67, 0.95], [18, 73, 1.1], [13, 86, 1.0], [24, 92, 0.9],
 ]
 
 // ---- camera --------------------------------------------------------------
@@ -319,7 +320,7 @@ export default function WholeGarden3D({ plots }) {
           ))}
 
           {/* surrounds filling the emptier west/south area */}
-          <Shed position={[-14, 0, 14]} />
+          <Shed position={[14, 0, 14]} />
           {ORCHARD.map(([x, z, s], i) => (
             <Tree key={i} position={[x, 0, z]} scale={s} />
           ))}
