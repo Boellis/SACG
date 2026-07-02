@@ -39,6 +39,20 @@ export const CROP_TYPES = {
   carrot:     { label: 'Carrot',     emoji: '🥕', foliage: '#66a80f', height: 0.6 },
   herb:       { label: 'Herb',       emoji: '🌿', foliage: '#40c057', height: 0.7 },
   flower:     { label: 'Flower',     emoji: '🌼', foliage: '#51cf66', height: 0.8, head: '#fcc419' },
+  corn: { label: 'Corn', emoji: '🌽', foliage: '#5b8c3c', height: 7, fruit: '#f2c14e', head: '#c9b037' },
+  strawberry: { label: 'Strawberry', emoji: '🍓', foliage: '#4a9c3f', height: 0.5, fruit: '#c92a2a' },
+  cucumber: { label: 'Cucumber', emoji: '🥒', foliage: '#3f9142', height: 1.5, fruit: '#2f6b32' },
+  zucchini: { label: 'Zucchini', emoji: '🥒', foliage: '#2e6b34', height: 1.5, fruit: '#2f5d2a' },
+  kale: { label: 'Kale', emoji: '🥬', foliage: '#4f7f68', height: 1.3 },
+  cabbage: { label: 'Cabbage', emoji: '🥬', foliage: '#4f7a5e', height: 0.8, head: '#a3c2a8' },
+  broccoli: { label: 'Broccoli', emoji: '🥦', foliage: '#52735a', height: 1.5, head: '#3a5540' },
+  onion: { label: 'Onion', emoji: '🧅', foliage: '#5f9080', height: 1.5 },
+  potato: { label: 'Potato', emoji: '🥔', foliage: '#4f7942', height: 1.6 },
+  basil: { label: 'Basil', emoji: '🌿', foliage: '#4f9d33', height: 1 },
+  marigold: { label: 'Marigold', emoji: '🏵️', foliage: '#2f6b32', height: 1, head: '#eaa221' },
+  pea: { label: 'Peas', emoji: '🫛', foliage: '#5f9450', height: 4.5, fruit: '#6aab3d' },
+  radish: { label: 'Radish', emoji: '🫜', foliage: '#719d1c', height: 0.6, ground: '#c72c48' },
+  pumpkin: { label: 'Pumpkin', emoji: '🎃', foliage: '#3d7a28', height: 1.2, ground: '#e8590c' },
 }
 export const CROP_KEYS = Object.keys(CROP_TYPES)
 
@@ -53,6 +67,10 @@ export const FEATURE_TYPES = {
   barrel:  { label: 'Water Barrel', size: [1.5, 1.5, 2], color: '#3b82f6' },
   stake:   { label: 'Tomato Stake', size: [0.2, 0.2, 5], color: '#7f9a5f' },
   trellis: { label: 'Trellis',      size: [4, 0.3, 5],   color: '#a1866f' },
+  archTrellis: { label: 'Arch Trellis', size: [4.8, 1.1, 7.8], color: '#9c6b3e' },
+  obelisk: { label: 'Obelisk Trellis', size: [2, 2, 6], color: '#6b4226' },
+  arbor: { label: 'Pergola Arbor', size: [7, 7, 7], color: '#a1665b' },
+  coldFrame: { label: 'Cold Frame', size: [3.3, 2.5, 1.5], color: '#9c7a4d' },
 }
 export const FEATURE_KEYS = Object.keys(FEATURE_TYPES)
 

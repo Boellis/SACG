@@ -214,6 +214,10 @@ export default function Plot3DLayout({
             <button type="button" className={BTN_OUTLINE} onClick={() => addShape('feature', 'barrel')}>+ Barrel</button>
             <button type="button" className={BTN_OUTLINE} onClick={() => addShape('feature', 'stake')}>+ Stake</button>
             <button type="button" className={BTN_OUTLINE} onClick={() => addShape('feature', 'trellis')}>+ Trellis</button>
+            <button type="button" className={BTN_OUTLINE} onClick={() => addShape('feature', 'archTrellis')}>+ Arch</button>
+            <button type="button" className={BTN_OUTLINE} onClick={() => addShape('feature', 'obelisk')}>+ Obelisk</button>
+            <button type="button" className={BTN_OUTLINE} onClick={() => addShape('feature', 'arbor')}>+ Arbor</button>
+            <button type="button" className={BTN_OUTLINE} onClick={() => addShape('feature', 'coldFrame')}>+ Cold Frame</button>
             <span className="mx-1 self-stretch w-px bg-gray-200" />
           </>
         )}
