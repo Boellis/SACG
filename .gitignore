@@ -13,6 +13,9 @@ build/
 
 # Firebase
 .firebase/
+# Firebase Extensions — local secret references (point to Secret Manager; never commit)
+extensions/*.local
+extensions/*.secret.local
 firebase-debug.log
 firestore-debug.log
 database-debug.log

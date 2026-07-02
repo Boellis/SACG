@@ -5,6 +5,9 @@
     "rewrites": [{ "source": "**", "destination": "/index.html" }]
   },
   "firestore": { "rules": "firestore.rules", "indexes": "firestore.indexes.json" },
+  "extensions": {
+    "firestore-send-email": "firebase/firestore-send-email@0.2.9"
+  },
   "emulators": {
     "auth": { "port": 9099 },
     "firestore": { "port": 8080 },
