@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AuthProvider } from './auth/AuthProvider';
 import { RequireAuth, RequireAdmin } from './auth/guards';
@@ -7,6 +8,11 @@ import Layout from './components/Layout';
 import MyHoursPage from './features/hours/MyHoursPage';
 import PlotsPage from './features/plots/PlotsPage';
 import PlotDetail from './features/plots/PlotDetail';
+
+// Lazy-loaded so the whole-garden three.js / R3F scene is code-split into its own
+// chunk and only fetched when a member opens the Whole Garden page (same approach
+// PlotDetail uses for its 3D layout card).
+const WholeGardenPage = lazy(() => import('./features/plots/WholeGardenPage'));
 import MembersPage from './features/members/MembersPage';
 import WaitlistPage from './features/members/WaitlistPage';
 import MemberDetail from './features/members/MemberDetail';
@@ -36,6 +42,14 @@ export default function App() {
               <Route path="/" element={<Dashboard />} />
               <Route path="/plots" element={<PlotsPage />} />
               <Route path="/plots/:id" element={<PlotDetail />} />
+              <Route
+                path="/garden"
+                element={
+                  <Suspense fallback={<div className="p-6 text-gray-500 text-sm">Loading garden…</div>}>
+                    <WholeGardenPage />
+                  </Suspense>
+                }
+              />
               <Route path="/calendar" element={<CalendarPage />} />
               <Route path="/my-hours" element={<MyHoursPage />} />
               <Route path="/forum" element={<ForumPage />} />

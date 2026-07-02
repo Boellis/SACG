@@ -11,6 +11,7 @@ interface NavItem {
 const memberNavItems: NavItem[] = [
   { to: '/', label: 'Dashboard' },
   { to: '/plots', label: 'Plots' },
+  { to: '/garden', label: 'Whole Garden' },
   { to: '/calendar', label: 'Calendar' },
   { to: '/my-hours', label: 'My Hours' },
   { to: '/forum', label: 'Message Board' },
