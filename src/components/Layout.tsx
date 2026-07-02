@@ -14,6 +14,8 @@ const memberNavItems: NavItem[] = [
   { to: '/calendar', label: 'Calendar' },
   { to: '/my-hours', label: 'My Hours' },
   { to: '/forum', label: 'Message Board' },
+  { to: '/lounge', label: 'Lounge' },
+  { to: '/messages', label: 'Messages' },
 ];
 
 const adminNavItems: NavItem[] = [

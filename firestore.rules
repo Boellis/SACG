@@ -62,5 +62,33 @@ service cloud.firestore {
         allow update, delete: if isAdmin() || (isActive() && resource.data.authorId == request.auth.uid);
       }
     }
+
+    // Members Lounge directory — public-safe member info (name + join date).
+    match /directory/{id} {
+      allow read: if isActive() || isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // Lounge billboard announcements — any active member reads; admins write.
+    match /announcements/{id} {
+      allow read: if isActive() || isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // 1:1 direct messages — only the two participants can see or write a conversation.
+    match /conversations/{cid} {
+      allow read, update: if signedIn() && request.auth.uid in resource.data.participants;
+      allow create: if isActive()
+        && request.auth.uid in request.resource.data.participants
+        && request.resource.data.participants.size() == 2;
+
+      match /messages/{mid} {
+        allow read: if signedIn()
+          && request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.participants;
+        allow create: if isActive()
+          && request.resource.data.senderId == request.auth.uid
+          && request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.participants;
+      }
+    }
   }
 }

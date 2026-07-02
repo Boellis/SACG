@@ -3,10 +3,15 @@ import { vi, describe, it, expect, beforeEach } from 'vitest';
 vi.mock('firebase/firestore', () => {
   const serverTimestamp = vi.fn(() => ({ _type: 'serverTimestamp' }));
   const updateDoc = vi.fn().mockResolvedValue(undefined);
+  const setDoc = vi.fn().mockResolvedValue(undefined);
+  const getDoc = vi.fn().mockResolvedValue({
+    exists: () => true,
+    data: () => ({ displayName: 'Member One', uid: 'member-1' }),
+  });
   const onSnapshot = vi.fn(() => vi.fn());
   const doc = vi.fn((_db: unknown, ...args: unknown[]) => ({ _path: args.join('/') }));
   const collection = vi.fn((_db: unknown, path: unknown) => ({ _path: path }));
-  return { serverTimestamp, updateDoc, onSnapshot, doc, collection };
+  return { serverTimestamp, updateDoc, setDoc, getDoc, onSnapshot, doc, collection };
 });
 
 vi.mock('../../lib/firebase', () => ({
@@ -23,7 +28,8 @@ vi.mock('../../data/collections', () => {
     _path: `members/${id}`,
     withConverter: function () { return this; },
   });
-  return { membersCol, memberDoc };
+  const directoryDoc = (id: string) => ({ _path: `directory/${id}` });
+  return { membersCol, memberDoc, directoryDoc };
 });
 
 import * as firestoreMod from 'firebase/firestore';

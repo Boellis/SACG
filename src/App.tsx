@@ -17,6 +17,10 @@ import SettingsPage from './features/settings/SettingsPage';
 import EmailPage from './features/email/EmailPage';
 import ForumPage from './features/forum/ForumPage';
 import ThreadPage from './features/forum/ThreadPage';
+import MembersLoungePage from './features/lounge/MembersLoungePage';
+import MemberProfilePage from './features/lounge/MemberProfilePage';
+import MessagesPage from './features/lounge/MessagesPage';
+import ChatPage from './features/lounge/ChatPage';
 
 export default function App() {
   return (
@@ -34,6 +38,10 @@ export default function App() {
               <Route path="/my-hours" element={<MyHoursPage />} />
               <Route path="/forum" element={<ForumPage />} />
               <Route path="/forum/:threadId" element={<ThreadPage />} />
+              <Route path="/lounge" element={<MembersLoungePage />} />
+              <Route path="/lounge/:memberId" element={<MemberProfilePage />} />
+              <Route path="/messages" element={<MessagesPage />} />
+              <Route path="/messages/:convId" element={<ChatPage />} />
               <Route element={<RequireAdmin />}>
                 <Route path="/members" element={<MembersPage />} />
                 <Route path="/members/:id" element={<MemberDetail />} />

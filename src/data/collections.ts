@@ -20,6 +20,15 @@ export const settingsDoc = () => doc(db, 'settings', 'org');
 // extension owns their shape), so this ref intentionally has no converter.
 export const mailCol = collection(db, 'mail');
 
+// Members Lounge directory + 1:1 chat. Raw refs (no converter); readers map ids.
+export const directoryCol = collection(db, 'directory');
+export const directoryDoc = (id: string) => doc(db, 'directory', id);
+export const conversationsCol = collection(db, 'conversations');
+export const conversationDoc = (id: string) => doc(db, 'conversations', id);
+export const messagesCol = (cid: string) => collection(db, 'conversations', cid, 'messages');
+export const announcementsCol = collection(db, 'announcements');
+export const announcementDoc = (id: string) => doc(db, 'announcements', id);
+
 export const threadsCol = collection(db, 'threads').withConverter(conv<ForumThread>());
 export const threadDoc = (id: string) => doc(db, 'threads', id).withConverter(conv<ForumThread>());
 export const repliesCol = (threadId: string) => collection(db, 'threads', threadId, 'replies').withConverter(conv<ForumReply>());

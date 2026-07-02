@@ -1,10 +1,12 @@
 import {
   onSnapshot,
   updateDoc,
+  getDoc,
+  setDoc,
   serverTimestamp,
   type Unsubscribe,
 } from 'firebase/firestore';
-import { membersCol, memberDoc } from '../../data/collections';
+import { membersCol, memberDoc, directoryDoc } from '../../data/collections';
 import type { Member, Role, MemberStatus } from '../../lib/types';
 
 export function listenMembers(cb: (members: Member[]) => void): Unsubscribe {
@@ -24,6 +26,16 @@ export async function approveMember(id: string): Promise<void> {
     status: 'active',
     joinedAt: serverTimestamp(),
   } as Record<string, unknown>);
+  // Publish a public-safe directory entry for the Members Lounge.
+  const snap = await getDoc(memberDoc(id));
+  const m = snap.data();
+  if (m) {
+    await setDoc(
+      directoryDoc(id),
+      { displayName: m.displayName ?? '', uid: m.uid ?? null, joinedAt: m.joinedAt ?? serverTimestamp() },
+      { merge: true },
+    );
+  }
 }
 
 export async function setMemberRole(id: string, role: Role): Promise<void> {

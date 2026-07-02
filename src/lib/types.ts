@@ -138,3 +138,45 @@ export interface MailDoc {
   // Written back by the extension as it attempts delivery.
   delivery?: { state?: MailDeliveryState; error?: string; attempts?: number };
 }
+
+// Public-safe member info for the Members Lounge (name + join date). Kept separate
+// from the members collection so sensitive fields (email, phone, dues) stay admin-only.
+export interface DirectoryEntry {
+  id: string;             // = member id
+  displayName: string;
+  uid: string | null;     // auth uid, for direct messages; null = not yet messageable
+  joinedAt?: Timestamp;
+}
+
+// 1:1 direct message between two members (chat). id = the two auth uids sorted + joined.
+export interface Conversation {
+  id: string;
+  participants: string[]; // two auth uids
+  participantNames: Record<string, string>;
+  lastMessage?: string;
+  lastAt?: Timestamp;
+  createdAt?: Timestamp;
+}
+
+export interface ChatMessage {
+  id: string;
+  senderId: string;       // auth uid
+  text: string;
+  createdAt?: Timestamp;
+}
+
+// Lounge billboard: admin-posted announcements / rules / doc links. Keeps
+// general notices out of the forum. expiresAt absent = lives indefinitely;
+// set = temporary (hidden once past). pinned floats to the top.
+export interface Announcement {
+  id: string;
+  title: string;
+  body: string;
+  linkUrl?: string;
+  linkLabel?: string;
+  pinned?: boolean;
+  createdAt: Timestamp;
+  createdBy: string;
+  authorName?: string;
+  expiresAt?: Timestamp;
+}

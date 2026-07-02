@@ -441,3 +441,56 @@ describe('Firestore security rules — volunteerHours self-logging', () => {
     await assertSucceeds(getDoc(doc(db, 'volunteerHours', 'H_active2')));
   });
 });
+
+describe('Firestore security rules — lounge directory, announcements & chat', () => {
+  beforeEach(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore();
+      await setDoc(doc(db, 'directory', 'active1'), { displayName: 'Active One', uid: 'active1', joinedAt: NOW });
+      await setDoc(doc(db, 'announcements', 'A1'), { title: 'Rule', body: 'x', createdAt: NOW, createdBy: 'admin1' });
+      await setDoc(doc(db, 'conversations', 'active1_active2'), {
+        participants: ['active1', 'active2'],
+        participantNames: { active1: 'Active One', active2: 'Active Two' },
+        createdAt: NOW,
+      });
+      await setDoc(doc(db, 'conversations', 'active1_active2', 'messages', 'M1'), {
+        senderId: 'active1',
+        text: 'hi',
+        createdAt: NOW,
+      });
+    });
+  });
+
+  it('40. active1 reads directory SUCCEEDS; pending1 FAILS', async () => {
+    await assertSucceeds(getDoc(doc(testEnv.authenticatedContext('active1').firestore(), 'directory', 'active1')));
+    await assertFails(getDoc(doc(testEnv.authenticatedContext('pending1').firestore(), 'directory', 'active1')));
+  });
+
+  it('41. admin writes directory SUCCEEDS; active1 (non-admin) FAILS', async () => {
+    await assertSucceeds(setDoc(doc(testEnv.authenticatedContext('admin1').firestore(), 'directory', 'x'), { displayName: 'X', uid: null }));
+    await assertFails(setDoc(doc(testEnv.authenticatedContext('active1').firestore(), 'directory', 'y'), { displayName: 'Y', uid: null }));
+  });
+
+  it('42. active1 reads announcements SUCCEEDS; active1 write FAILS; admin write SUCCEEDS', async () => {
+    await assertSucceeds(getDoc(doc(testEnv.authenticatedContext('active1').firestore(), 'announcements', 'A1')));
+    await assertFails(setDoc(doc(testEnv.authenticatedContext('active1').firestore(), 'announcements', 'A2'), { title: 't', body: 'b', createdAt: NOW, createdBy: 'active1' }));
+    await assertSucceeds(setDoc(doc(testEnv.authenticatedContext('admin1').firestore(), 'announcements', 'A3'), { title: 't', body: 'b', createdAt: NOW, createdBy: 'admin1' }));
+  });
+
+  it('43. participant reads conversation SUCCEEDS; non-participant FAILS', async () => {
+    await assertSucceeds(getDoc(doc(testEnv.authenticatedContext('active1').firestore(), 'conversations', 'active1_active2')));
+    await assertFails(getDoc(doc(testEnv.authenticatedContext('admin1').firestore(), 'conversations', 'active1_active2')));
+  });
+
+  it('44. active1 creates conversation incl. self SUCCEEDS; excluding self FAILS', async () => {
+    await assertSucceeds(setDoc(doc(testEnv.authenticatedContext('active1').firestore(), 'conversations', 'active1_active3'), { participants: ['active1', 'active3'], participantNames: {}, createdAt: NOW }));
+    await assertFails(setDoc(doc(testEnv.authenticatedContext('active1').firestore(), 'conversations', 'active2_active3'), { participants: ['active2', 'active3'], participantNames: {}, createdAt: NOW }));
+  });
+
+  it('45. participant sends+reads message SUCCEEDS; non-participant FAILS', async () => {
+    await assertSucceeds(setDoc(doc(testEnv.authenticatedContext('active1').firestore(), 'conversations', 'active1_active2', 'messages', 'M2'), { senderId: 'active1', text: 'yo', createdAt: NOW }));
+    await assertSucceeds(getDoc(doc(testEnv.authenticatedContext('active2').firestore(), 'conversations', 'active1_active2', 'messages', 'M1')));
+    await assertFails(getDoc(doc(testEnv.authenticatedContext('admin1').firestore(), 'conversations', 'active1_active2', 'messages', 'M1')));
+    await assertFails(setDoc(doc(testEnv.authenticatedContext('admin1').firestore(), 'conversations', 'active1_active2', 'messages', 'M3'), { senderId: 'admin1', text: 'no', createdAt: NOW }));
+  });
+});
