@@ -8,6 +8,7 @@ import * as THREE from 'three'
 import { Edges } from '@react-three/drei'
 import Plant3D from './Plant3D'
 import { STRUCTURE_MODELS } from './structures'
+import { FEATURE_TYPES } from './layout3dModel'
 
 const GROUND = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
 
@@ -66,7 +67,18 @@ function Body({ shape, mat }) {
     // Newer structures (arch trellis, obelisk, arbor, cold frame) have their own
     // self-contained models; older ones fall through to the inline models below.
     const Structure = STRUCTURE_MODELS[variant]
-    if (Structure) return <Structure />
+    if (Structure) {
+      // Each structure model is authored at a fixed design footprint; scale it to the
+      // shape's current size (feet) so the width/depth/height controls actually resize
+      // the mesh, not just the bounding box. size = [w, d, h]; design size = [w, d, h].
+      const def = FEATURE_TYPES[variant]?.size
+      const s = def ? [w / def[0], h / def[2], d / def[1]] : [1, 1, 1]
+      return (
+        <group scale={s}>
+          <Structure />
+        </group>
+      )
+    }
     if (variant === 'stake') return <Stake h={h} color={color} mat={mat} />
     if (variant === 'trellis') return <Trellis w={w} h={h} color={color} mat={mat} />
     return (
