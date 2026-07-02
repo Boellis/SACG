@@ -180,3 +180,44 @@ export interface Announcement {
   authorName?: string;
   expiresAt?: Timestamp;
 }
+
+// A file admins upload to Cloud Storage and share with the whole club. Metadata
+// lives in Firestore; the bytes live at storagePath (documents/{id}/{fileName}).
+export interface Document {
+  id: string;
+  title: string;
+  description?: string;
+  category?: string;
+  fileName: string;
+  storagePath: string;
+  downloadURL: string;
+  size: number;            // bytes
+  contentType: string;
+  uploadedBy: string;
+  uploaderName: string;
+  createdAt: Timestamp;
+  expiresAt?: Timestamp | null;
+}
+
+// Poll / survey authored by an admin. Option ids are what a vote references.
+export interface PollOption {
+  id: string;
+  text: string;
+}
+export interface Poll {
+  id: string;
+  question: string;
+  options: PollOption[];
+  createdAt: Timestamp;
+  createdBy: string;
+  authorName: string;
+  expiresAt?: Timestamp;
+  closed?: boolean;
+}
+// One member's vote; doc id = voter auth uid → at most one vote per member.
+export interface PollVote {
+  id: string;
+  optionId: string;
+  memberId: string;
+  createdAt: Timestamp;
+}

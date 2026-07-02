@@ -1,6 +1,7 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, connectAuthEmulator, GoogleAuthProvider } from 'firebase/auth';
 import { initializeFirestore, connectFirestoreEmulator } from 'firebase/firestore';
+import { getStorage } from 'firebase/storage';
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FB_API_KEY,
@@ -17,6 +18,7 @@ export const auth = getAuth(app);
 // the client SDK otherwise throws on any undefined field value, which is easy to hit
 // with optional fields across writes.
 export const db = initializeFirestore(app, { ignoreUndefinedProperties: true });
+export const storage = getStorage(app);
 export const googleProvider = new GoogleAuthProvider();
 
 // Only connect to local emulators during dev (`vite dev`). A production build

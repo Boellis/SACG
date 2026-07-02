@@ -29,6 +29,16 @@ export const messagesCol = (cid: string) => collection(db, 'conversations', cid,
 export const announcementsCol = collection(db, 'announcements');
 export const announcementDoc = (id: string) => doc(db, 'announcements', id);
 
+// Shared documents (admin uploads → Cloud Storage). Raw refs; readers map ids.
+export const documentsCol = collection(db, 'documents');
+export const documentDoc = (id: string) => doc(db, 'documents', id);
+
+// Polls / surveys. Votes live in a subcollection keyed by the voter's uid.
+export const pollsCol = collection(db, 'polls');
+export const pollDoc = (id: string) => doc(db, 'polls', id);
+export const votesCol = (pollId: string) => collection(db, 'polls', pollId, 'votes');
+export const votesDoc = (pollId: string, uid: string) => doc(db, 'polls', pollId, 'votes', uid);
+
 export const threadsCol = collection(db, 'threads').withConverter(conv<ForumThread>());
 export const threadDoc = (id: string) => doc(db, 'threads', id).withConverter(conv<ForumThread>());
 export const repliesCol = (threadId: string) => collection(db, 'threads', threadId, 'replies').withConverter(conv<ForumReply>());

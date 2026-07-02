@@ -21,6 +21,8 @@ import MembersLoungePage from './features/lounge/MembersLoungePage';
 import MemberProfilePage from './features/lounge/MemberProfilePage';
 import MessagesPage from './features/lounge/MessagesPage';
 import ChatPage from './features/lounge/ChatPage';
+import DocumentsPage from './features/documents/DocumentsPage';
+import PollsPage from './features/polls/PollsPage';
 
 export default function App() {
   return (
@@ -42,6 +44,8 @@ export default function App() {
               <Route path="/lounge/:memberId" element={<MemberProfilePage />} />
               <Route path="/messages" element={<MessagesPage />} />
               <Route path="/messages/:convId" element={<ChatPage />} />
+              <Route path="/documents" element={<DocumentsPage />} />
+              <Route path="/polls" element={<PollsPage />} />
               <Route element={<RequireAdmin />}>
                 <Route path="/members" element={<MembersPage />} />
                 <Route path="/members/:id" element={<MemberDetail />} />

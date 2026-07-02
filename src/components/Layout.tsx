@@ -16,6 +16,8 @@ const memberNavItems: NavItem[] = [
   { to: '/forum', label: 'Message Board' },
   { to: '/lounge', label: 'Lounge' },
   { to: '/messages', label: 'Messages' },
+  { to: '/documents', label: 'Documents' },
+  { to: '/polls', label: 'Polls' },
 ];
 
 const adminNavItems: NavItem[] = [

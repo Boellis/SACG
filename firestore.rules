@@ -90,5 +90,24 @@ service cloud.firestore {
           && request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.participants;
       }
     }
+
+    // Shared documents metadata — any active member reads; admins write.
+    match /documents/{id} {
+      allow read: if isActive() || isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // Polls / surveys — admins author polls; active members cast one vote each
+    // (vote doc id = voter uid → one vote per member).
+    match /polls/{id} {
+      allow read: if isActive() || isAdmin();
+      allow write: if isAdmin();
+      match /votes/{uid} {
+        allow read: if isActive() || isAdmin();
+        allow create, update: if isActive()
+          && request.auth.uid == uid
+          && request.resource.data.memberId == request.auth.uid;
+      }
+    }
   }
 }
