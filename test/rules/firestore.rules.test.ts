@@ -133,6 +133,11 @@ describe('Firestore security rules — plots', () => {
     await assertSucceeds(getDoc(doc(db, 'plots', 'P1')));
   });
 
+  it("4a. active2 (not holder) reads plots/P1 SUCCEEDS — members can view each other's plots", async () => {
+    const db = testEnv.authenticatedContext('active2').firestore();
+    await assertSucceeds(getDoc(doc(db, 'plots', 'P1')));
+  });
+
   it('5. active1 (holder) updates plots/P1 crops SUCCEEDS', async () => {
     const db = testEnv.authenticatedContext('active1').firestore();
     await assertSucceeds(updateDoc(doc(db, 'plots', 'P1'), { crops: [{ name: 'Kale' }] }));
@@ -161,6 +166,18 @@ describe('Firestore security rules — plots', () => {
   it('8b. active2 (not holder) updates plots/P1 layout FAILS', async () => {
     const db = testEnv.authenticatedContext('active2').firestore();
     await assertFails(updateDoc(doc(db, 'plots', 'P1'), { layout: { shapes: [] } }));
+  });
+
+  const layout3d = { version: 3, plot: { widthFt: 8, depthFt: 50, half: false }, shapes: [] };
+
+  it('8c. active1 (holder) updates plots/P1 layout3d SUCCEEDS', async () => {
+    const db = testEnv.authenticatedContext('active1').firestore();
+    await assertSucceeds(updateDoc(doc(db, 'plots', 'P1'), { layout3d }));
+  });
+
+  it('8d. active2 (not holder) updates plots/P1 layout3d FAILS', async () => {
+    const db = testEnv.authenticatedContext('active2').firestore();
+    await assertFails(updateDoc(doc(db, 'plots', 'P1'), { layout3d }));
   });
 
   it('9. admin1 create plots/P9 SUCCEEDS; active1 create plots/P9 FAILS', async () => {

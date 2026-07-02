@@ -27,6 +27,29 @@ export type PlotShapeType = 'rect' | 'circle' | 'triangle';
 export interface PlotShape { id: string; type: PlotShapeType; x: number; y: number; w: number; h: number; color: string; label: string; }
 export interface PlotLayout { shapes: PlotShape[]; }
 
+// Immersive 3D plot layout (React Three Fiber tool in features/plots/layout3d).
+// World units = feet; origin = plot center. Stored under the separate `layout3d`
+// field so it never collides with the 2D `layout` above.
+export type Shape3DKind = 'bed' | 'path' | 'feature';
+export type Feature3DVariant = 'barrel' | 'stake' | 'trellis';
+export interface Crop3D { id: string; type: string; pos: [number, number]; }
+export interface Shape3D {
+  id: string;
+  kind: Shape3DKind;
+  variant?: Feature3DVariant;   // features only
+  pos: [number, number];        // [x, z] in feet
+  size: [number, number, number]; // [w, d, h] in feet
+  rotationY: number;            // radians
+  color: string;
+  label: string;
+  crops: Crop3D[];              // beds only
+}
+export interface PlotLayout3D {
+  version: number;
+  plot: { widthFt: number; depthFt: number; half: boolean };
+  shapes: Shape3D[];
+}
+
 export interface Plot {
   id: string;            // "12" | "12A" | "12B"
   number: number;
@@ -44,6 +67,7 @@ export interface Plot {
   crops: Crop[];
   mapPos?: { row: number; col: number };
   layout?: PlotLayout;
+  layout3d?: PlotLayout3D;
   notes?: string;
 }
 

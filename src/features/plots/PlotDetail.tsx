@@ -1,13 +1,17 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Button, Card, Badge } from '../../components/ui';
 import { useAuth } from '../../auth/useAuth';
-import type { Plot } from '../../lib/types';
-import { listenPlot, updatePlot, toggleDuesPaid, toggleDepositPaid, unassignPlot, splitPlot } from './plotsApi';
+import type { Plot, PlotLayout3D } from '../../lib/types';
+import { listenPlot, updatePlot, toggleDuesPaid, toggleDepositPaid, unassignPlot, splitPlot, setPlotLayout3d } from './plotsApi';
 import { splitPlotIds } from '../../logic/plots';
 import AssignPlotModal from './AssignPlotModal';
 import CropsEditor from './CropsEditor';
 import PlotLayoutEditor from './PlotLayoutEditor';
+
+// Lazy-loaded so the three.js / R3F bundle is code-split into its own chunk and
+// only fetched when a plot detail page is opened (keeps the main app bundle lean).
+const PlotLayoutCard = lazy(() => import('./layout3d/PlotLayoutCard'));
 
 function PaidBadge({ paid }: { paid: boolean }) {
   return paid ? <Badge color="green">Paid</Badge> : <Badge color="amber">Unpaid</Badge>;
@@ -26,7 +30,7 @@ function StatusBadge({ status }: { status: Plot['status'] }) {
 export default function PlotDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { role } = useAuth();
+  const { member, role } = useAuth();
 
   const [plot, setPlot] = useState<Plot | null | undefined>(undefined); // undefined = loading
   const [editing, setEditing] = useState(false);
@@ -248,10 +252,26 @@ export default function PlotDetail() {
           <CropsEditor plot={plot} />
         </Card>
 
-        {/* Plot Layout */}
-        <Card title="Plot Layout" className="md:col-span-2">
-          <PlotLayoutEditor plot={plot} />
-        </Card>
+        {/* Plot Layout — existing 2D SVG editor + immersive 3D tool behind a toggle */}
+        <Suspense
+          fallback={
+            <Card title="Plot Layout" className="md:col-span-2">
+              <p className="text-sm text-gray-500">Loading layout…</p>
+            </Card>
+          }
+        >
+          <PlotLayoutCard
+            key={plot.id}
+            widthFt={8}
+            depthFt={50}
+            half={plot.half !== 'whole'}
+            layout={plot.layout3d ?? null}
+            onSave={(l: PlotLayout3D) => setPlotLayout3d(plot.id, l)}
+            readOnly={!(role === 'admin' || plot.holderMemberId === member?.id)}
+          >
+            <PlotLayoutEditor plot={plot} />
+          </PlotLayoutCard>
+        </Suspense>
 
         {assignOpen && (
           <AssignPlotModal open={assignOpen} onClose={() => setAssignOpen(false)} plot={plot} />
