@@ -131,6 +131,10 @@ export default function PlotDetail() {
     );
   }
 
+  // Dues status and the owner's notes are private — only the plot holder or an
+  // admin can see them (members can still see crops, layout, watering, etc.).
+  const canSeePrivate = role === 'admin' || plot.holderMemberId === member?.id;
+
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-4">
@@ -165,7 +169,7 @@ export default function PlotDetail() {
               <dt className="text-gray-500">Holder</dt>
               <dd className="font-medium">{plot.holderName || '—'}</dd>
             </div>
-            {plot.notes && (
+            {canSeePrivate && plot.notes && (
               <div className="pt-2 border-t border-gray-100">
                 <dt className="text-gray-500 mb-1">Notes</dt>
                 <dd className="text-gray-800">{plot.notes}</dd>
@@ -174,7 +178,8 @@ export default function PlotDetail() {
           </dl>
         </Card>
 
-        {/* Dues & Deposit */}
+        {/* Dues & Deposit — private; hidden from members who aren't the holder or an admin */}
+        {canSeePrivate && (
         <Card title="Dues & Deposit">
           <dl className="space-y-2 text-sm">
             <div className="flex justify-between items-center">
@@ -226,6 +231,7 @@ export default function PlotDetail() {
             </div>
           )}
         </Card>
+        )}
 
         {/* Holder assignment (admin) */}
         {role === 'admin' && (
