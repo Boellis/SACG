@@ -1,0 +1,13 @@
+# dependencies
+node_modules/
+plot3d-demo/node_modules/
+
+# build output
+dist/
+plot3d-demo/dist/
+
+# logs / misc
+*.log
+npm-debug.log*
+.DS_Store
+.vite/
