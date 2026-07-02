@@ -46,8 +46,9 @@ const noop = () => {}
 /** World placement (center + Y-rotation) for a plot number. */
 function placement(number) {
   if (number <= RIGHT_MAX) {
-    // Plots 1–24 (long line): WEST side, depth extends -X. Centered on Z=0, plot 1 north.
-    return { centerX: -CENTER_OFFSET_X, centerZ: (number - RIGHT_MID) * SLOT, rotationY: -Math.PI / 2 }
+    // Plots 1–24 (long line): WEST side, depth extends -X. Centered on Z=0; plot 24 north,
+    // plot 1 south (same north-is-higher-number direction as the 25–33 line).
+    return { centerX: -CENTER_OFFSET_X, centerZ: (RIGHT_MID - number) * SLOT, rotationY: -Math.PI / 2 }
   }
   // Plots 25–33 (short line): EAST side, depth extends +X. North end = 33, running south to 25.
   return { centerX: CENTER_OFFSET_X, centerZ: NORTH_Z + (SHORT_MAX - number) * SLOT, rotationY: Math.PI / 2 }
