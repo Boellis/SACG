@@ -11,6 +11,7 @@ type AudienceMode = 'all' | 'custom';
 
 const RECENT_MAIL_WINDOW = 200; // how many recent mail docs to load for the log
 const MAIL_PAGE_SIZE = 25; // rows per page in the Recent emails log
+const SEND_GAP_MS = 5000; // spacing between individual sends so Gmail doesn't rate-limit the burst
 
 function dedupeByEmail(members: Member[]): Member[] {
   const seen = new Set<string>();
@@ -44,6 +45,7 @@ export default function EmailPage() {
   const [sending, setSending] = useState(false);
   const [sendMsg, setSendMsg] = useState('');
   const [sendError, setSendError] = useState('');
+  const [sendProgress, setSendProgress] = useState<{ done: number; total: number } | null>(null);
   const [recentMail, setRecentMail] = useState<MailDoc[]>([]);
   const [mailPage, setMailPage] = useState(1);
 
@@ -75,23 +77,30 @@ export default function EmailPage() {
       setSendError('Add a subject or message before sending.');
       return;
     }
+    const secs = Math.round((recipients.length * SEND_GAP_MS) / 1000);
+    const eta = secs < 90 ? `${secs} seconds` : `${Math.round(secs / 60)} minutes`;
     const ok = window.confirm(
       `Send a separate, individual email to each of ${recipients.length} member${
         recipients.length !== 1 ? 's' : ''
-      }?`,
+      }?\n\nThey go out one at a time (about ${eta}) so they aren't rate-limited — keep this page open until it finishes.`,
     );
     if (!ok) return;
 
     setSending(true);
     setSendError('');
     setSendMsg('');
+    setSendProgress({ done: 0, total: recipients.length });
     try {
-      const n = await enqueueIndividualEmails(recipients, subject, body, member?.id ?? null);
-      setSendMsg(`Queued ${n} individual email${n !== 1 ? 's' : ''} for delivery.`);
+      const n = await enqueueIndividualEmails(recipients, subject, body, member?.id ?? null, {
+        gapMs: SEND_GAP_MS,
+        onProgress: (done, total) => setSendProgress({ done, total }),
+      });
+      setSendMsg(`Sent ${n} individual email${n !== 1 ? 's' : ''}.`);
     } catch (err) {
-      setSendError(err instanceof Error ? err.message : 'Failed to queue emails.');
+      setSendError(err instanceof Error ? err.message : 'Failed to send.');
     } finally {
       setSending(false);
+      setSendProgress(null);
     }
   }
 
@@ -203,7 +212,9 @@ export default function EmailPage() {
           <div className="flex flex-wrap items-center gap-3">
             <Button variant="primary" disabled={!canSend || sending} onClick={handleSendIndividually}>
               {sending
-                ? 'Queuing…'
+                ? sendProgress
+                  ? `Sending ${sendProgress.done}/${sendProgress.total}…`
+                  : 'Sending…'
                 : `Send individually to ${recipients.length} member${recipients.length !== 1 ? 's' : ''}`}
             </Button>
           </div>
@@ -212,8 +223,8 @@ export default function EmailPage() {
           {sendError && <p className="text-sm text-red-600">{sendError}</p>}
 
           <p className="text-xs text-gray-500">
-            Delivery is handled by the mail extension on the server. If nothing arrives, confirm the
-            Trigger Email extension is installed and active (see the delivery log below).
+            Sends one at a time, a few seconds apart, so the mail service doesn&apos;t rate-limit the
+            batch — keep this page open until it finishes. Delivery status shows in the log below.
           </p>
         </div>
       </Card>

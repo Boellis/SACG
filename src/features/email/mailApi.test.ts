@@ -72,4 +72,13 @@ describe('enqueueIndividualEmails', () => {
     expect(count).toBe(0);
     expect(mockedAddDoc).not.toHaveBeenCalled();
   });
+
+  it('reports progress once per recipient', async () => {
+    const calls: Array<[number, number]> = [];
+    await enqueueIndividualEmails(recipients, 'S', 'B', null, { onProgress: (d, t) => calls.push([d, t]) });
+    expect(calls).toEqual([
+      [1, 2],
+      [2, 2],
+    ]);
+  });
 });
