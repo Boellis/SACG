@@ -6,6 +6,11 @@ plot3d-demo/node_modules/
 dist/
 plot3d-demo/dist/
 
+# member-cleanup: never commit credentials or generated reports
+member-cleanup/node_modules/
+member-cleanup/serviceAccount.json
+member-cleanup/report-*.json
+
 # logs / misc
 *.log
 npm-debug.log*

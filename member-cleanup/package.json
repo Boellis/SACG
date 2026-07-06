@@ -1,0 +1,12 @@
+{
+  "name": "sacg-member-cleanup",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dryrun": "node cleanup-ghost-members.mjs",
+    "commit": "node cleanup-ghost-members.mjs --commit"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.0.0"
+  }
+}
