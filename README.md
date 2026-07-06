@@ -1,121 +1,115 @@
-# SACG — Immersive 3D Plot Layout
+# SACG — handoff repo
 
-An interactive 3D garden-plot layout tool for the South Austin Community Garden app,
-built with **React Three Fiber + drei** (React 18). Plots render to scale (full 8′×50′,
-half 8′×25′) with draggable raised beds, paths, features (water barrel, tomato stake,
-trellis), and procedural crops you can arrange by hand. Ships behind a **2D / 3D toggle**
-so the existing SVG editor stays available, and has a **read-only viewer** mode so members
-can browse other members' plots.
+This repo holds two self-contained pieces of work to merge into the **main South Austin
+Community Garden app**, plus a preview demo. Everything an agent needs to execute each task
+is written below and in the linked per-folder READMEs — read them, then match the details to
+the real project's schema.
+
+## 📁 What's in this repo — where everything is
+
+| Path | What it is | Start here |
+|------|------------|-----------|
+| **`plot3d-export/`** | **Task A** — port-ready 3D plot-layout components, `INTEGRATION.md`, and the Firebase adapter `firebasePlotLayout.js`. **Copy these into the app.** | `plot3d-export/INTEGRATION.md` |
+| **`member-cleanup/`** | **Task B** — dry-run-first admin script to delete Excel-imported "ghost" member accounts and reassign their plots. | `member-cleanup/README.md` |
+| `plot3d-demo/` | Standalone Vite app that previews Task A on a page mimicking the Plot detail page. Preview only — not for porting. | `plot3d-demo/` (`npm i && npm run dev`) |
 
 ---
 
-## 🤖 If you're an AI agent asked to "merge this into the main project"
+# Task A — Merge the immersive 3D plot layout
 
-Do these steps, in order. Everything you need is in this README; `plot3d-export/INTEGRATION.md`
-and the file-top comments in `plot3d-export/firebasePlotLayout.js` have extra detail.
+A React Three Fiber + drei (React 18) 3D layout tool: to-scale plots (full 8′×50′, half 8′×25′)
+with draggable beds, paths, features (water barrel, tomato stake, trellis), and procedural crops
+you arrange by hand. Ships behind a **2D / 3D toggle** (keeps the existing SVG editor) and has a
+**read-only viewer** so members can browse other members' plots.
 
-1. **Copy the components** from **`plot3d-export/`** (NOT `plot3d-demo/`) into the app, e.g.
-   `src/components/plot/layout3d/`:
-   `layout3dModel.js`, `Plant3D.jsx`, `GardenShape3D.jsx`, `NavGuide.jsx`,
-   `Plot3DLayout.jsx`, `PlotLayoutCard.jsx`, `firebasePlotLayout.js`.
-
-2. **Install deps** — the app is **React 18.3.1**, so pin the React-18 line (R3F v9 / drei v10
-   need React 19 and will break the build):
+### 🤖 Agent steps
+1. **Copy components** from **`plot3d-export/`** (NOT `plot3d-demo/`) into e.g.
+   `src/components/plot/layout3d/`: `layout3dModel.js`, `Plant3D.jsx`, `GardenShape3D.jsx`,
+   `NavGuide.jsx`, `Plot3DLayout.jsx`, `PlotLayoutCard.jsx`, `firebasePlotLayout.js`.
+2. **Install (React 18 — pinned; R3F v9/drei v10 need React 19 and break the build):**
    ```bash
    npm i three@^0.160 @react-three/fiber@^8 @react-three/drei@^9
    ```
-
-3. **Mount it** on the Plot detail page. Find the existing **Plot Layout** card — the
-   `<div class="bg-white rounded-2xl … md:col-span-2">` that contains
-   `<svg viewBox="0 0 400 300">` — and replace that card with `PlotLayoutCard`, passing the
-   existing SVG editor through as `children` (it becomes the 2D tab):
+3. **Mount** on the Plot detail page — replace the existing Plot Layout card (the
+   `<div class="… md:col-span-2">` containing `<svg viewBox="0 0 400 300">`) with `PlotLayoutCard`,
+   passing your current SVG editor as `children` (it becomes the 2D tab):
    ```jsx
    import PlotLayoutCard from '@/components/plot/layout3d/PlotLayoutCard'
    import { loadPlotLayout3d, savePlotLayout3d } from '@/components/plot/layout3d/firebasePlotLayout'
-   import { db } from '@/lib/firebase'            // ← this project's shared Firestore instance
+   import { db } from '@/lib/firebase'            // ← this project's shared Firestore
 
    const [layout, setLayout] = useState(null)
    useEffect(() => { loadPlotLayout3d(db, plot.id).then(setLayout) }, [plot.id])
 
    <PlotLayoutCard
-     widthFt={8} depthFt={50}                      // full plot; half auto-halves depth
+     widthFt={8} depthFt={50}
      half={plot.half !== 'whole'}                  // ← CONFIRM this field on the real model
      layout={layout}
      onSave={(l) => savePlotLayout3d(db, plot.id, l).then(() => setLayout(l))}
-     readOnly={!canEditThisPlot}                   // members viewing others' plots
+     readOnly={!canEditThisPlot}
    >
-     <ExistingSvgLayoutEditor plot={plot} />       {/* your current 2D editor */}
+     <ExistingSvgLayoutEditor plot={plot} />
    </PlotLayoutCard>
    ```
+4. **Persistence** — use `firebasePlotLayout.js` (has the checklist at the top): import the shared
+   `db`, confirm the plot doc path (assumes top-level `plots` keyed by id — adjust if nested), add
+   the included Firestore security rule. Layouts save as JSON under a new `layout3d` field.
+5. **Verify** — 3D tab → add/drag a bed → add/drag crops → Walk (WASD) → Save → refresh reloads it.
 
-4. **Wire persistence** using `firebasePlotLayout.js` (do NOT hand-roll). Its top comment has a
-   checklist: import the project's shared `db`, confirm the plot doc path (it assumes a
-   top-level `plots` collection keyed by id — adjust `PLOTS_COLLECTION` / `plotDocRef` if plots
-   are nested, e.g. by season), and add the included Firestore security rule (read: any member;
-   write: plot holder or admin, `layout3d` field only).
+Full detail: **`plot3d-export/INTEGRATION.md`**.
 
-5. **Verify**: run the app, open a plot, toggle **3D**, add a bed, drag it, add crops and drag
-   them, switch to **Walk** and move with WASD, click **Save**, refresh — the layout should
-   reload from Firestore.
-
-### Gotchas
-- Copy from **`plot3d-export/`**. `plot3d-demo/` is only a preview harness — its `localStorage`
-  saving and approximated `garden-*` colors are demo-only; the real app uses your Firebase and
-  your Tailwind theme (it already defines `garden-*`, so the components match natively).
-- **Confirm `plot.half`** — `half={plot.half !== 'whole'}` was inferred from the "Split into A/B"
-  button; verify the actual field/values.
-- Keep the **2D tab** as a graceful fallback for browsers without WebGL.
-
----
-
-## Data model (`Shape3D`) — saved as JSON under a new `layout3d` field
+### Data model (`Shape3D`, stored under `layout3d`)
 ```js
 { version: 3, plot: { widthFt, depthFt, half }, shapes: [
-  {
-    id, kind: 'bed' | 'path' | 'feature',
-    variant?: 'barrel' | 'stake' | 'trellis',   // features only
-    pos:  [x, z],       // feet, origin = plot center
-    size: [w, d, h],    // feet
-    rotationY,          // radians
-    color, label,
-    crops: [{ id, type, pos: [x, z] }]  // beds only; pos is LOCAL to the bed
-  }
+  { id, kind:'bed'|'path'|'feature', variant?:'barrel'|'stake'|'trellis',
+    pos:[x,z], size:[w,d,h], rotationY, color, label,
+    crops:[{ id, type, pos:[x,z] }] }   // beds only; pos LOCAL to the bed
 ]}
 ```
-World units are **feet** (1 unit = 1 ft). It's a new field, so it never collides with any
-existing 2D layout data. `type` is a key in `CROP_TYPES` (tomato, eggplant, pepper, beans,
-sunflower, watermelon, squash, lettuce, carrot, herb, flower).
+Units are feet. `type` ∈ `CROP_TYPES` (tomato, eggplant, pepper, beans, sunflower, watermelon,
+squash, lettuce, carrot, herb, flower).
 
-## Controls
-- **3/4 View** (default) — raised third-person, best for editing. Drag empty ground to orbit,
-  scroll to zoom.
-- **Top** — straight-down for precise alignment.
-- **Walk** — first-person: **WASD / arrow keys** to move, drag to look around (head-turn in place).
-- Drag a bed/path/feature to reposition it; drag individual plants to arrange them within a bed.
-- Click a shape to open its editor (label, color, size, rotation, feature type, crops).
-- The **How to navigate** infographic (`NavGuide.jsx`) toggles from the toolbar.
+### Controls
+- **3/4 View** (default, best for editing) — drag ground to orbit, scroll to zoom.
+- **Top** — straight-down for alignment. **Walk** — first-person: WASD/arrows move, drag to look.
+- Drag beds/paths/features to move; drag plants to arrange within a bed; click a shape to edit it.
 
-## Knobs
-- **Plot size** — `widthFt` / `depthFt` props (default 8×50; `half` halves the depth). If your
-  A/B split is along width instead, change `effectivePlot()` in `layout3dModel.js`.
-- **Crops** — add/edit in `CROP_TYPES` (`layout3dModel.js`). Rendering is procedural (no assets).
-- **Features** — `FEATURE_TYPES` (`layout3dModel.js`); the 3D models live in `GardenShape3D.jsx`.
-- **Soil** — a procedural canvas texture; no image files.
+### Gotchas
+- Copy from `plot3d-export/`, not the demo (demo's `localStorage` saving + approximated
+  `garden-*` colors are demo-only; the real app uses your Firebase and Tailwind theme).
+- Confirm the `plot.half` field/values. Keep the 2D tab as a WebGL fallback.
 
 ---
 
-## Repo layout
+# Task B — Clean up "ghost" member accounts
 
-| Folder | What it is |
-|--------|------------|
-| **`plot3d-export/`** | Port-ready components + `INTEGRATION.md` + `firebasePlotLayout.js`. **Copy these.** |
-| **`plot3d-demo/`** | Standalone Vite app mounting the tool on a page mimicking the Plot detail page — preview only. |
+Excel-imported member profiles are holding plots the real (July) signups can't claim. Remove the
+ghosts and move their plots to the real duplicate accounts.
 
-## Run the preview demo
+### Decisions already made (baked into the script)
+- **Ghost** = `role: 'member'`, created **2026-05-31**, excluding **Brandon Ellis**.
+- **Match** ghost → real by **exact email** (case-insensitive).
+- **Reassign** the ghost's plot(s) to the real account; **delete the ghost's Firestore profile only**.
+- **No match / ambiguous / real already has a plot → skip & report** (never orphan a plot).
+
+### 🤖 Agent steps
+1. Open **`member-cleanup/cleanup-ghost-members.mjs`** and match the **`CONFIG`** block to the real
+   schema — collection names, member field names, and especially **how a plot references its holder**
+   (`plotHolderFields`). The `TODO`s mark every spot. If plots are tracked on the member doc instead
+   of a `plots` collection, adapt the reassignment (noted in `member-cleanup/README.md`).
+2. Authenticate: `export GOOGLE_APPLICATION_CREDENTIALS=/path/to/serviceAccount.json`.
+3. **Dry run** (writes nothing): `cd member-cleanup && npm install && npm run dryrun`.
+   It prints the full plan + `report-dryrun.json`. **Sanity-check `Ghost candidates: N`** against the
+   number of Excel rows before going further.
+4. **Back up Firestore** (export), then **`npm run commit`** to apply.
+
+Full detail + schema checklist: **`member-cleanup/README.md`**.
+
+---
+
+## Run the preview demo (Task A)
 ```bash
 cd plot3d-demo
 npm install
-npm run dev
+npm run dev        # open the printed URL; persists to localStorage (Firebase stand-in)
 ```
-Open the printed URL. The demo persists to `localStorage` (Firebase stand-in) so refresh
-round-trips.
