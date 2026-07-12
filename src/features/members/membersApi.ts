@@ -52,8 +52,10 @@ export async function approveMember(id: string): Promise<void> {
  */
 export async function mergeMembers(plan: MergePlan): Promise<void> {
   const batch = writeBatch(db);
-  for (const plotId of plan.plotIds) {
-    batch.update(doc(db, 'plots', plotId), { holderMemberId: plan.keepId });
+  for (const u of plan.plotUpdates) {
+    const patch: Record<string, unknown> = { holderMemberIds: u.holderMemberIds };
+    if (u.setPrimary) patch.holderMemberId = plan.keepId;
+    batch.update(doc(db, 'plots', u.id), patch);
   }
   const joinedAt = plan.joinedAt ?? serverTimestamp();
   const memberPatch: Record<string, unknown> = {

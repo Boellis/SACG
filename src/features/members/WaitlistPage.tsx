@@ -91,8 +91,8 @@ export default function WaitlistPage() {
                     {duplicate && (
                       <div className="mt-1 text-xs text-amber-700">
                         Looks like existing member “{duplicate.displayName}”.{' '}
-                        {plan && plan.plotIds.length > 0
-                          ? `Merging keeps this login and assigns plot ${plan.plotIds.join(', ')}.`
+                        {plan && plan.plotUpdates.length > 0
+                          ? `Merging keeps this login and assigns plot ${plan.plotUpdates.map((u) => u.id).join(', ')}.`
                           : 'Merging links their records (no plot on file).'}
                       </div>
                     )}

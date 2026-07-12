@@ -1,5 +1,34 @@
 import { describe, it, expect } from 'vitest';
-import { groupByNumber, splitPlotIds, isAvailable, plotOccupancy } from './plots';
+import { groupByNumber, splitPlotIds, isAvailable, plotOccupancy, plotHolderIds, isPlotHeldBy } from './plots';
+
+describe('plotHolderIds / isPlotHeldBy (multi-holder)', () => {
+  it('uses the holderMemberIds array when present', () => {
+    const p = { holderMemberId: 'a', holderMemberIds: ['a', 'b', 'c'] } as any;
+    expect(plotHolderIds(p)).toEqual(['a', 'b', 'c']);
+    expect(isPlotHeldBy(p, 'b')).toBe(true);
+    expect(isPlotHeldBy(p, 'c')).toBe(true);
+    expect(isPlotHeldBy(p, 'z')).toBe(false);
+  });
+
+  it('falls back to the single holderMemberId when no array', () => {
+    const p = { holderMemberId: 'a' } as any;
+    expect(plotHolderIds(p)).toEqual(['a']);
+    expect(isPlotHeldBy(p, 'a')).toBe(true);
+    expect(isPlotHeldBy(p, 'b')).toBe(false);
+  });
+
+  it('falls back when the array is present but empty', () => {
+    const p = { holderMemberId: 'a', holderMemberIds: [] } as any;
+    expect(plotHolderIds(p)).toEqual(['a']);
+    expect(isPlotHeldBy(p, 'a')).toBe(true);
+  });
+
+  it('returns empty for an unheld plot and never matches null/undefined', () => {
+    expect(plotHolderIds({} as any)).toEqual([]);
+    expect(isPlotHeldBy({ holderMemberId: 'a' } as any, null)).toBe(false);
+    expect(isPlotHeldBy({ holderMemberId: 'a' } as any, undefined)).toBe(false);
+  });
+});
 describe('plots logic', () => {
   it('splitPlotIds builds A/B ids', () => {
     expect(splitPlotIds(12)).toEqual({ a:'12A', b:'12B' });

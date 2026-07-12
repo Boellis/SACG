@@ -206,7 +206,7 @@ describe('WaitlistPage', () => {
       keepId: 'signup1',
       absorbId: 'roster1',
       displayName: 'Jane Roster',
-      plotIds: ['12'],
+      plotUpdates: [{ id: '12', holderMemberIds: ['signup1'], setPrimary: true }],
     });
   });
 });

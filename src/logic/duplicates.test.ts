@@ -97,8 +97,19 @@ describe('buildMergePlan', () => {
     expect(plan.joinedAt).toBe(roster.joinedAt);
   });
 
-  it('collects only the plots the roster stub holds', () => {
-    expect(buildMergePlan(pending, roster, plots).plotIds).toEqual(['7', '8']);
+  it('swaps the stub for the kept id on every plot it solely holds, as primary', () => {
+    const plan = buildMergePlan(pending, roster, plots);
+    expect(plan.plotUpdates.map((u) => u.id)).toEqual(['7', '8']);
+    expect(plan.plotUpdates[0]).toEqual({ id: '7', holderMemberIds: ['new'], setPrimary: true });
+    expect(plan.plotUpdates[1]).toEqual({ id: '8', holderMemberIds: ['new'], setPrimary: true });
+  });
+
+  it('handles a co-held plot: swaps in the array without becoming primary', () => {
+    const coPlot = mkPlot({ id: '2', holderMemberId: 'katie', holderMemberIds: ['katie', 'old'] });
+    const plan = buildMergePlan(pending, roster, [coPlot]);
+    expect(plan.plotUpdates).toEqual([
+      { id: '2', holderMemberIds: ['katie', 'new'], setPrimary: false },
+    ]);
   });
 
   it('falls back to the signup name/phone when the roster record lacks them', () => {
@@ -107,6 +118,6 @@ describe('buildMergePlan', () => {
     const plan = buildMergePlan(richPending, bareRoster, []);
     expect(plan.displayName).toBe('Jane');
     expect(plan.phone).toBe('999');
-    expect(plan.plotIds).toEqual([]);
+    expect(plan.plotUpdates).toEqual([]);
   });
 });

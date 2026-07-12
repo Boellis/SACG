@@ -5,6 +5,7 @@ import { useAuth } from '../../auth/useAuth';
 import { listenPlots } from '../plots/plotsApi';
 import { listenDirectory } from './directoryApi';
 import { startConversation } from './chatApi';
+import { isPlotHeldBy } from '../../logic/plots';
 import type { Plot, DirectoryEntry } from '../../lib/types';
 
 function fmtDate(ts?: { toDate: () => Date }): string {
@@ -24,7 +25,7 @@ export default function MemberProfilePage() {
   useEffect(() => listenPlots(setPlots), []);
 
   const entry = dir.find((d) => d.id === memberId);
-  const theirPlots = useMemo(() => plots.filter((p) => p.holderMemberId === memberId), [plots, memberId]);
+  const theirPlots = useMemo(() => plots.filter((p) => isPlotHeldBy(p, memberId)), [plots, memberId]);
 
   const myUid = user?.uid;
   const isSelf = !!entry?.uid && entry.uid === myUid;

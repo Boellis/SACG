@@ -13,6 +13,7 @@ import {
 import { listenPlots } from '../plots/plotsApi';
 import { listenMemberHours, addHours, deleteHours } from '../hours/hoursApi';
 import { yearToDateHours } from '../../logic/hours';
+import { isPlotHeldBy } from '../../logic/plots';
 import { formatTenure } from '../../lib/tenure';
 
 function RoleBadge({ role }: { role: Role }) {
@@ -114,7 +115,7 @@ export default function MemberDetail() {
     await approveMember(member.id);
   }
 
-  const memberPlots = member ? plots.filter((p) => p.holderMemberId === member.id) : [];
+  const memberPlots = member ? plots.filter((p) => isPlotHeldBy(p, member.id)) : [];
   const ytdHours = yearToDateHours(hourEntries, new Date().getUTCFullYear());
   const sortedHours = [...hourEntries].sort(
     (a, b) => b.date.toDate().getTime() - a.date.toDate().getTime(),

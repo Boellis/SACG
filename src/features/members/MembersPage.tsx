@@ -5,6 +5,7 @@ import type { Member, Plot, Role, MemberStatus } from '../../lib/types';
 import { listenMembers } from './membersApi';
 import { listenPlots } from '../plots/plotsApi';
 import { paginate } from '../../logic/pagination';
+import { isPlotHeldBy } from '../../logic/plots';
 
 const PAGE_SIZE = 10;
 
@@ -66,7 +67,7 @@ export default function MembersPage() {
   const result = paginate(filtered, page, PAGE_SIZE);
 
   function plotsForMember(memberId: string): Plot[] {
-    return plots.filter((p) => p.holderMemberId === memberId);
+    return plots.filter((p) => isPlotHeldBy(p, memberId));
   }
 
   if (loading) {

@@ -56,7 +56,8 @@ export interface Plot {
   half: PlotHalf;
   size?: string;
   status: PlotStatus;
-  holderMemberId?: string;
+  holderMemberId?: string;        // primary holder (drives holderName + dues attribution)
+  holderMemberIds?: string[];     // all holders incl. primary — source of truth for access
   holderName?: string;
   duesAmount: number;
   depositAmount: number;

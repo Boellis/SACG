@@ -39,6 +39,14 @@ async function seed() {
       createdAt: NOW,
       currentYearHours: 0,
     });
+    await setDoc(doc(db, 'members', 'active3'), {
+      role: 'member',
+      status: 'active',
+      displayName: 'Active Three',
+      email: 'a3@x.com',
+      createdAt: NOW,
+      currentYearHours: 0,
+    });
     await setDoc(doc(db, 'members', 'pending1'), {
       role: 'member',
       status: 'pending',
@@ -52,6 +60,20 @@ async function seed() {
       half: 'whole',
       status: 'assigned',
       holderMemberId: 'active1',
+      duesAmount: 30,
+      depositAmount: 25,
+      duesPaid: false,
+      depositPaid: false,
+      season: '2026',
+      crops: [],
+    });
+    // Co-held plot: active1 primary, active2 co-gardener via holderMemberIds.
+    await setDoc(doc(db, 'plots', 'P_CO'), {
+      number: 2,
+      half: 'whole',
+      status: 'assigned',
+      holderMemberId: 'active1',
+      holderMemberIds: ['active1', 'active2'],
       duesAmount: 30,
       depositAmount: 25,
       duesPaid: false,
@@ -188,6 +210,21 @@ describe('Firestore security rules — plots', () => {
   it('8f. active2 (not holder) updates plots/P1 lastWateredAt FAILS', async () => {
     const db = testEnv.authenticatedContext('active2').firestore();
     await assertFails(updateDoc(doc(db, 'plots', 'P1'), { lastWateredAt: NOW }));
+  });
+
+  it('8g. active2 (co-gardener via holderMemberIds) updates P_CO crops SUCCEEDS', async () => {
+    const db = testEnv.authenticatedContext('active2').firestore();
+    await assertSucceeds(updateDoc(doc(db, 'plots', 'P_CO'), { crops: [{ name: 'Basil' }] }));
+  });
+
+  it('8h. active2 (co-gardener) updates P_CO duesPaid FAILS — private fields stay locked', async () => {
+    const db = testEnv.authenticatedContext('active2').firestore();
+    await assertFails(updateDoc(doc(db, 'plots', 'P_CO'), { duesPaid: true }));
+  });
+
+  it('8i. active3 (not a holder of P_CO) updates its crops FAILS', async () => {
+    const db = testEnv.authenticatedContext('active3').firestore();
+    await assertFails(updateDoc(doc(db, 'plots', 'P_CO'), { crops: [{ name: 'Basil' }] }));
   });
 
   it('9. admin1 create plots/P9 SUCCEEDS; active1 create plots/P9 FAILS', async () => {

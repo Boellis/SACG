@@ -4,6 +4,7 @@ import { Button, Card, Badge, Modal } from '../../components/ui';
 import { useAuth } from '../../auth/useAuth';
 import { listenPlots } from '../plots/plotsApi';
 import { listenDirectory } from './directoryApi';
+import { plotHolderIds } from '../../logic/plots';
 import {
   listenAnnouncements,
   createAnnouncement,
@@ -34,10 +35,10 @@ export default function MembersLoungePage() {
   const plotsByMember = useMemo(() => {
     const m = new Map<string, string[]>();
     for (const p of plots) {
-      if (p.holderMemberId) {
-        const arr = m.get(p.holderMemberId) ?? [];
+      for (const holderId of plotHolderIds(p)) {
+        const arr = m.get(holderId) ?? [];
         arr.push(p.id);
-        m.set(p.holderMemberId, arr);
+        m.set(holderId, arr);
       }
     }
     return m;

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Button } from '../../components/ui';
 import { useAuth } from '../../auth/useAuth';
 import { setCrops } from './plotsApi';
+import { isPlotHeldBy } from '../../logic/plots';
 import type { Plot, Crop } from '../../lib/types';
 
 interface Props {
@@ -25,7 +26,7 @@ function fromEditable(c: EditableCrop): Crop {
 
 export default function CropsEditor({ plot }: Props) {
   const { member, role } = useAuth();
-  const canEdit = role === 'admin' || member?.id === plot.holderMemberId;
+  const canEdit = role === 'admin' || isPlotHeldBy(plot, member?.id);
 
   const [rows, setRows] = useState<EditableCrop[]>(plot.crops.map(toEditable));
   const [saving, setSaving] = useState(false);

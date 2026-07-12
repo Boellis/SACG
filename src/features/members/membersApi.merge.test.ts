@@ -47,12 +47,17 @@ describe('mergeMembers', () => {
       absorbId: 'old1',
       displayName: 'Jane Roe',
       phone: '555',
-      plotIds: ['7', '8'],
+      plotUpdates: [
+        { id: '7', holderMemberIds: ['new1'], setPrimary: true },
+        { id: '8', holderMemberIds: ['katie', 'new1'], setPrimary: false },
+      ],
     };
     await mergeMembers(plan);
 
-    expect(h.batchOps).toContainEqual({ op: 'update', path: 'plots/7', data: { holderMemberId: 'new1' } });
-    expect(h.batchOps).toContainEqual({ op: 'update', path: 'plots/8', data: { holderMemberId: 'new1' } });
+    // sole holder: array swapped AND promoted to primary
+    expect(h.batchOps).toContainEqual({ op: 'update', path: 'plots/7', data: { holderMemberIds: ['new1'], holderMemberId: 'new1' } });
+    // co-gardener: array swapped, primary left alone
+    expect(h.batchOps).toContainEqual({ op: 'update', path: 'plots/8', data: { holderMemberIds: ['katie', 'new1'] } });
 
     const keepSet = h.batchOps.find((o) => o.op === 'set' && o.path === 'members/new1');
     expect(keepSet?.data).toMatchObject({ status: 'active', displayName: 'Jane Roe', phone: '555' });
@@ -68,7 +73,7 @@ describe('mergeMembers', () => {
   });
 
   it('omits phone when absent and uses a server timestamp for joinedAt', async () => {
-    const plan: MergePlan = { keepId: 'n', absorbId: 'o', displayName: 'No Phone', plotIds: [] };
+    const plan: MergePlan = { keepId: 'n', absorbId: 'o', displayName: 'No Phone', plotUpdates: [] };
     await mergeMembers(plan);
 
     const keepSet = h.batchOps.find((o) => o.op === 'set' && o.path === 'members/n');

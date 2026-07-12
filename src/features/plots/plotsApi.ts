@@ -43,6 +43,7 @@ export async function createPlot(input: CreatePlotInput): Promise<void> {
     size: size ?? '',
     status: 'available',
     holderMemberId: null,
+    holderMemberIds: [],
     holderName: null,
     duesAmount: duesAmount ?? 0,
     depositAmount: depositAmount ?? 25,
@@ -75,6 +76,7 @@ export async function assignPlot(plot: Plot, member: Member): Promise<void> {
   const batch = writeBatch(db);
   batch.update(doc(db, 'plots', plot.id), {
     holderMemberId: member.id,
+    holderMemberIds: [member.id],
     holderName: member.displayName,
     status: 'assigned',
   });
@@ -90,8 +92,27 @@ export async function assignPlot(plot: Plot, member: Member): Promise<void> {
 export async function unassignPlot(plotId: string): Promise<void> {
   await updateDoc(plotDoc(plotId), {
     holderMemberId: null,
+    holderMemberIds: [],
     holderName: null,
     status: 'available',
+  } as Record<string, unknown>);
+}
+
+/**
+ * Set the full holder list for a plot (used by the admin add/remove co-gardener
+ * UI). The first entry is the primary holder — it drives dues attribution and
+ * leads the displayed holder name. Passing an empty list clears the plot.
+ */
+export async function setPlotHolders(
+  plotId: string,
+  holders: { id: string; name: string }[],
+): Promise<void> {
+  const ids = holders.map((h) => h.id);
+  await updateDoc(plotDoc(plotId), {
+    holderMemberIds: ids,
+    holderMemberId: ids[0] ?? null,
+    holderName: holders.map((h) => h.name).join(' & ') || null,
+    status: ids.length > 0 ? 'assigned' : 'available',
   } as Record<string, unknown>);
 }
 
@@ -103,6 +124,7 @@ export async function splitPlot(plot: Plot): Promise<void> {
     size: plot.size ?? '',
     status: 'available' as const,
     holderMemberId: null,
+    holderMemberIds: [],
     holderName: null,
     duesAmount: plot.duesAmount,
     depositAmount: plot.depositAmount,

@@ -5,8 +5,9 @@ import { useAuth } from '../../auth/useAuth';
 import type { Plot, PlotLayout3D } from '../../lib/types';
 import type { Timestamp } from 'firebase/firestore';
 import { listenPlot, updatePlot, toggleDuesPaid, toggleDepositPaid, unassignPlot, splitPlot, setPlotLayout3d, markPlotWatered } from './plotsApi';
-import { splitPlotIds } from '../../logic/plots';
+import { splitPlotIds, isPlotHeldBy, plotHolderIds } from '../../logic/plots';
 import AssignPlotModal from './AssignPlotModal';
+import PlotGardeners from './PlotGardeners';
 import CropsEditor from './CropsEditor';
 import PlotLayoutEditor from './PlotLayoutEditor';
 
@@ -133,7 +134,7 @@ export default function PlotDetail() {
 
   // Dues status and the owner's notes are private — only the plot holder or an
   // admin can see them (members can still see crops, layout, watering, etc.).
-  const canSeePrivate = role === 'admin' || plot.holderMemberId === member?.id;
+  const canSeePrivate = role === 'admin' || isPlotHeldBy(plot, member?.id);
 
   return (
     <div className="space-y-6">
@@ -233,26 +234,23 @@ export default function PlotDetail() {
         </Card>
         )}
 
-        {/* Holder assignment (admin) */}
+        {/* Gardeners (admin) — primary holder + co-gardeners */}
         {role === 'admin' && (
-          <Card title="Holder">
-            {plot.holderMemberId ? (
+          <Card title="Gardeners">
+            {plotHolderIds(plot).length > 0 ? (
               <div className="space-y-3">
-                <p className="text-sm text-gray-800 font-medium">{plot.holderName}</p>
-                <div className="flex gap-2">
-                  <Button variant="secondary" className="text-xs" onClick={() => setAssignOpen(true)}>
-                    Reassign
-                  </Button>
+                <PlotGardeners plot={plot} />
+                <div className="pt-3 border-t border-gray-100">
                   <Button
                     variant="danger"
                     className="text-xs"
                     onClick={async () => {
-                      if (confirm('Unassign this plot holder?')) {
+                      if (confirm('Unassign ALL gardeners from this plot?')) {
                         await unassignPlot(plot.id);
                       }
                     }}
                   >
-                    Unassign
+                    Unassign all
                   </Button>
                 </div>
               </div>
@@ -294,7 +292,7 @@ export default function PlotDetail() {
                 {plot.lastWateredAt ? formatCentral(plot.lastWateredAt) : 'Not yet logged'}
               </span>
             </div>
-            {(role === 'admin' || plot.holderMemberId === member?.id) && (
+            {(role === 'admin' || isPlotHeldBy(plot, member?.id)) && (
               <div className="flex flex-col items-end gap-1">
                 <Button className="text-xs" onClick={handleWatered} disabled={watering}>
                   {watering ? 'Logging…' : '💧 I just watered my plants'}
@@ -320,7 +318,7 @@ export default function PlotDetail() {
             half={plot.half !== 'whole'}
             layout={plot.layout3d ?? null}
             onSave={(l: PlotLayout3D) => setPlotLayout3d(plot.id, l)}
-            readOnly={!(role === 'admin' || plot.holderMemberId === member?.id)}
+            readOnly={!(role === 'admin' || isPlotHeldBy(plot, member?.id))}
           >
             <PlotLayoutEditor plot={plot} />
           </PlotLayoutCard>

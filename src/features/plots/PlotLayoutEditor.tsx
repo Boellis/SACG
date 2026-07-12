@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { Button } from '../../components/ui';
 import { useAuth } from '../../auth/useAuth';
 import { setPlotLayout } from './plotsApi';
+import { isPlotHeldBy } from '../../logic/plots';
 import type { Plot, PlotShape, PlotShapeType } from '../../lib/types';
 
 interface Props {
@@ -79,7 +80,7 @@ function ShapeGraphic({ shape }: { shape: PlotShape }) {
 
 export default function PlotLayoutEditor({ plot }: Props) {
   const { member, role } = useAuth();
-  const editable = role === 'admin' || plot.holderMemberId === member?.id;
+  const editable = role === 'admin' || isPlotHeldBy(plot, member?.id);
 
   const [shapes, setShapes] = useState<PlotShape[]>(plot.layout?.shapes ?? []);
   const [selectedId, setSelectedId] = useState<string | null>(null);

@@ -60,10 +60,18 @@ async function isVerifiedIdentity(uid: string): Promise<boolean> {
   }
 }
 
-/** Plot ids currently held by a member record. */
-async function plotsHeldBy(memberId: string): Promise<string[]> {
-  const snap = await admin.firestore().collection('plots').where('holderMemberId', '==', memberId).get();
-  return snap.docs.map((d) => d.id);
+/** Plots this member holds — primary (`holderMemberId`) or co-gardener (in
+ *  `holderMemberIds`). Unions both queries so pre- and post-migration plots match. */
+async function plotsHeldBy(memberId: string): Promise<admin.firestore.QueryDocumentSnapshot[]> {
+  const db = admin.firestore();
+  const [byPrimary, byArray] = await Promise.all([
+    db.collection('plots').where('holderMemberId', '==', memberId).get(),
+    db.collection('plots').where('holderMemberIds', 'array-contains', memberId).get(),
+  ]);
+  const found = new Map<string, admin.firestore.QueryDocumentSnapshot>();
+  byPrimary.forEach((d) => found.set(d.id, d));
+  byArray.forEach((d) => found.set(d.id, d));
+  return Array.from(found.values());
 }
 
 /**
@@ -81,11 +89,17 @@ async function mergeStubInto(
 ): Promise<string[]> {
   const db = admin.firestore();
   const old = stub.data();
-  const plotIds = await plotsHeldBy(stub.id);
+  const heldPlots = await plotsHeldBy(stub.id);
   const batch = db.batch();
 
-  for (const pid of plotIds) {
-    batch.update(db.collection('plots').doc(pid), { holderMemberId: keepId });
+  for (const p of heldPlots) {
+    const ids =
+      (p.get('holderMemberIds') as string[] | undefined) ??
+      (p.get('holderMemberId') ? [p.get('holderMemberId')] : []);
+    const swapped = Array.from(new Set(ids.map((x) => (x === stub.id ? keepId : x))));
+    const patch: admin.firestore.DocumentData = { holderMemberIds: swapped };
+    if (p.get('holderMemberId') === stub.id) patch.holderMemberId = keepId;
+    batch.update(p.ref, patch);
   }
 
   const name = old.displayName ?? keepData.displayName ?? '';
@@ -104,7 +118,7 @@ async function mergeStubInto(
   batch.delete(db.collection('directory').doc(stub.id));
 
   await batch.commit();
-  return plotIds;
+  return heldPlots.map((p) => p.id);
 }
 
 /**
@@ -141,7 +155,7 @@ export const notifyOnWaitlistSignup = onDocumentCreated('members/{memberId}', as
       return;
     }
 
-    const plotIds = await plotsHeldBy(stub.id);
+    const plotIds = (await plotsHeldBy(stub.id)).map((p) => p.id);
     const plotTxt = plotIds.length ? `plot ${plotIds.join(', ')}` : 'no plot on file';
     logger.info(`Unverified signup ${email} matches roster stub ${stub.id}; awaiting admin merge`);
     await queueMail(

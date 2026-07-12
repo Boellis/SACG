@@ -28,7 +28,8 @@ service cloud.firestore {
       allow read: if isActive() || isAdmin();
       allow create, delete: if isAdmin();
       allow update: if isAdmin() || (isActive()
-        && resource.data.holderMemberId == request.auth.uid
+        && (resource.data.holderMemberId == request.auth.uid
+            || (('holderMemberIds' in resource.data) && (request.auth.uid in resource.data.holderMemberIds)))
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['crops', 'layout', 'layout3d', 'lastWateredAt']));
     }
 

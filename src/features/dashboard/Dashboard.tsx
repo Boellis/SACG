@@ -6,6 +6,7 @@ import { listenMembers } from '../members/membersApi';
 import { listenMemberHours, listenAllHours } from '../hours/hoursApi';
 import { computeDuesRollup } from '../../logic/dues';
 import { waitlistOrder } from '../../logic/waitlist';
+import { isPlotHeldBy } from '../../logic/plots';
 import { yearToDateHours } from '../../logic/hours';
 import { formatTenure } from '../../lib/tenure';
 import { Card, Badge, Button } from '../../components/ui';
@@ -118,7 +119,7 @@ function MemberDashboard({ member }: { member: Member }) {
     return <p className="text-gray-500">Loading…</p>;
   }
 
-  const myPlots = plots.filter((p) => p.holderMemberId === member.id);
+  const myPlots = plots.filter((p) => isPlotHeldBy(p, member.id));
   const ytdHours = yearToDateHours(entries, new Date().getUTCFullYear());
   const hoursPercent = Math.min(100, (ytdHours / ANNUAL_HOURS_REQUIRED) * 100);
   const tenure = formatTenure(member.joinedAt, new Date());
