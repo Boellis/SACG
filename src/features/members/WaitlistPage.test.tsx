@@ -6,6 +6,12 @@ import { vi, describe, it, expect, beforeEach } from 'vitest';
 vi.mock('./membersApi', () => ({
   listenMembers: vi.fn(),
   approveMember: vi.fn().mockResolvedValue(undefined),
+  mergeMembers: vi.fn().mockResolvedValue(undefined),
+}));
+
+// Mock plotsApi (WaitlistPage listens to plots to detect duplicate holdings)
+vi.mock('../plots/plotsApi', () => ({
+  listenPlots: vi.fn(),
 }));
 
 // Mock useAuth to return an admin user
@@ -17,10 +23,13 @@ vi.mock('../../auth/useAuth', () => ({
 vi.mock('firebase/firestore', () => ({}));
 
 import * as membersApiMod from './membersApi';
+import * as plotsApiMod from '../plots/plotsApi';
 import WaitlistPage from './WaitlistPage';
 
 const mockedListenMembers = vi.mocked(membersApiMod.listenMembers);
 const mockedApproveMember = vi.mocked(membersApiMod.approveMember);
+const mockedMergeMembers = vi.mocked(membersApiMod.mergeMembers);
+const mockedListenPlots = vi.mocked(plotsApiMod.listenPlots);
 
 // Helper to build a fake Member with the minimal required fields
 function makeMember(overrides: Record<string, unknown>) {
@@ -40,6 +49,11 @@ function makeMember(overrides: Record<string, unknown>) {
 describe('WaitlistPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: no plots
+    mockedListenPlots.mockImplementation((cb) => {
+      cb([]);
+      return vi.fn();
+    });
     // Default: listenMembers immediately calls cb with fixture data
     mockedListenMembers.mockImplementation((cb) => {
       cb([
@@ -101,7 +115,7 @@ describe('WaitlistPage', () => {
       </MemoryRouter>,
     );
 
-    const approveButtons = screen.getAllByRole('button', { name: /approve/i });
+    const approveButtons = screen.getAllByRole('button', { name: /^approve$/i });
     fireEvent.click(approveButtons[0]); // first row = Older Pending
 
     expect(mockedApproveMember).toHaveBeenCalledWith('older');
@@ -127,5 +141,72 @@ describe('WaitlistPage', () => {
     );
 
     expect(screen.getByText(/no one on the waitlist/i)).toBeInTheDocument();
+  });
+
+  it('offers "Approve & merge" for a signup duplicating a roster stub and calls mergeMembers with the plan', () => {
+    mockedListenMembers.mockImplementation((cb) => {
+      cb([
+        // roster stub: imported, uid:null, holds the plot
+        makeMember({
+          id: 'roster1',
+          uid: null,
+          email: 'dup@example.com',
+          displayName: 'Jane Roster',
+          phone: '555-9',
+          status: 'active',
+          createdAt: { toMillis: () => 100, toDate: () => new Date(100) },
+        }) as any,
+        // the same person's self-signup: real uid, pending
+        makeMember({
+          id: 'signup1',
+          uid: 'signup1',
+          email: 'dup@example.com',
+          displayName: 'Jane',
+          status: 'pending',
+          createdAt: { toMillis: () => 200, toDate: () => new Date(200) },
+        }) as any,
+      ]);
+      return vi.fn();
+    });
+    mockedListenPlots.mockImplementation((cb) => {
+      cb([
+        {
+          id: '12',
+          number: 12,
+          half: 'whole',
+          status: 'assigned',
+          holderMemberId: 'roster1',
+          duesAmount: 0,
+          depositAmount: 0,
+          duesPaid: false,
+          depositPaid: false,
+          season: '2026',
+          crops: [],
+        } as any,
+      ]);
+      return vi.fn();
+    });
+
+    render(
+      <MemoryRouter>
+        <WaitlistPage />
+      </MemoryRouter>,
+    );
+
+    // duplicate hint is shown
+    expect(screen.getByText(/looks like existing member/i)).toBeInTheDocument();
+    expect(screen.getByText(/assigns plot 12/i)).toBeInTheDocument();
+
+    // the button merges instead of a plain approve
+    fireEvent.click(screen.getByRole('button', { name: /approve & merge/i }));
+
+    expect(mockedApproveMember).not.toHaveBeenCalled();
+    expect(mockedMergeMembers).toHaveBeenCalledTimes(1);
+    expect(mockedMergeMembers.mock.calls[0][0]).toMatchObject({
+      keepId: 'signup1',
+      absorbId: 'roster1',
+      displayName: 'Jane Roster',
+      plotIds: ['12'],
+    });
   });
 });

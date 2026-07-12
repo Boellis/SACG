@@ -1,6 +1,5 @@
 import { onDocumentCreated } from 'firebase-functions/v2/firestore';
-import { setGlobalOptions } from 'firebase-functions/v2';
-import { logger } from 'firebase-functions/v2';
+import { setGlobalOptions, logger } from 'firebase-functions/v2';
 import * as admin from 'firebase-admin';
 
 admin.initializeApp();
@@ -9,21 +8,112 @@ admin.initializeApp();
 setGlobalOptions({ region: 'us-central1' });
 
 /**
- * Who gets the "new person on the waitlist" alert. Add or change addresses here
- * and redeploy (`firebase deploy --only functions`). Each address is emailed.
+ * Who gets waitlist / duplicate alerts. Add or change addresses here and
+ * redeploy (`firebase deploy --only functions`). Each address is emailed.
  */
 const NOTIFY_TO = ['southatxgarden@gmail.com'];
 
 const APP_URL = 'https://sacg-garden-app.web.app';
 
+const normEmail = (e?: string | null): string => (e ?? '').trim().toLowerCase();
+
+/** Queue one email in the `mail` collection for the Trigger Email extension. */
+async function queueMail(subject: string, text: string): Promise<void> {
+  await admin.firestore().collection('mail').add({
+    to: NOTIFY_TO,
+    message: { subject, text },
+    toName: 'SACG Organizers',
+    createdBy: 'system:waitlist-notify',
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+}
+
 /**
- * When a new member document is created with `status: 'pending'` — i.e. a real
- * person just signed up and is waiting for approval — drop a message in the
- * `mail` collection. The installed Firebase "Trigger Email" extension delivers
- * it, so organizers get an email the moment someone lands on the waitlist.
- *
- * Guarded on `status === 'pending'` so it never fires for admin-imported members
- * (those are written straight to `active`).
+ * An existing roster record is a stub imported from the paper roster: it has
+ * `uid: null` and holds the plot. When the real person signs in they get a
+ * brand-new record keyed by their auth uid, which is why duplicates appear.
+ * Find the roster stub (if any) that shares this signup's email.
+ */
+async function findRosterStub(
+  email: string,
+  excludeId: string,
+): Promise<admin.firestore.QueryDocumentSnapshot | null> {
+  const target = normEmail(email);
+  if (!target) return null;
+  const snap = await admin.firestore().collection('members').where('uid', '==', null).get();
+  return snap.docs.find((d) => d.id !== excludeId && normEmail(d.get('email')) === target) ?? null;
+}
+
+/**
+ * Only auto-claim a roster record for a login whose identity is proven — a
+ * Google sign-in, or an email/password account that has verified its address.
+ * Anyone can *type* someone else's email into the password form, so an
+ * unverified match must be confirmed by an admin, never auto-merged.
+ */
+async function isVerifiedIdentity(uid: string): Promise<boolean> {
+  try {
+    const u = await admin.auth().getUser(uid);
+    if (u.emailVerified) return true;
+    return (u.providerData ?? []).some((p) => p.providerId === 'google.com');
+  } catch {
+    return false; // no auth user / lookup failed → treat as unverified
+  }
+}
+
+/** Plot ids currently held by a member record. */
+async function plotsHeldBy(memberId: string): Promise<string[]> {
+  const snap = await admin.firestore().collection('plots').where('holderMemberId', '==', memberId).get();
+  return snap.docs.map((d) => d.id);
+}
+
+/**
+ * Fold a roster stub into the real signup record, in one atomic batch:
+ *  - repoint every plot the stub holds to the new record,
+ *  - copy the roster name / phone / join-date onto the kept record and activate it,
+ *  - (re)publish the kept record's lounge directory entry with its real uid,
+ *  - delete the stub member doc + its stale directory entry.
+ * Mirrors the manual 2026-07-11 de-dup. Returns the repointed plot ids.
+ */
+async function mergeStubInto(
+  stub: admin.firestore.QueryDocumentSnapshot,
+  keepId: string,
+  keepData: admin.firestore.DocumentData,
+): Promise<string[]> {
+  const db = admin.firestore();
+  const old = stub.data();
+  const plotIds = await plotsHeldBy(stub.id);
+  const batch = db.batch();
+
+  for (const pid of plotIds) {
+    batch.update(db.collection('plots').doc(pid), { holderMemberId: keepId });
+  }
+
+  const name = old.displayName ?? keepData.displayName ?? '';
+  const joinedAt = old.joinedAt ?? keepData.joinedAt ?? admin.firestore.FieldValue.serverTimestamp();
+  const patch: admin.firestore.DocumentData = { status: 'active', joinedAt, displayName: name };
+  if (old.phone) patch.phone = old.phone;
+  batch.set(db.collection('members').doc(keepId), patch, { merge: true });
+
+  batch.set(
+    db.collection('directory').doc(keepId),
+    { displayName: name, uid: keepId, joinedAt },
+    { merge: true },
+  );
+
+  batch.delete(stub.ref);
+  batch.delete(db.collection('directory').doc(stub.id));
+
+  await batch.commit();
+  return plotIds;
+}
+
+/**
+ * Fires when a member document is created. Genuine self-signups arrive with
+ * `status: 'pending'`; admin-imported members are written straight to 'active'
+ * and are skipped. Three outcomes:
+ *   1. matches a roster stub + verified identity → auto-merge, email "linked".
+ *   2. matches a roster stub + unverified        → email "possible duplicate".
+ *   3. no roster match                           → email "new signup".
  */
 export const notifyOnWaitlistSignup = onDocumentCreated('members/{memberId}', async (event) => {
   const snap = event.data;
@@ -31,28 +121,44 @@ export const notifyOnWaitlistSignup = onDocumentCreated('members/{memberId}', as
   const m = snap.data();
   if (!m || m.status !== 'pending') return;
 
+  const memberId = event.params.memberId;
   const name = (m.displayName ?? '').trim() || '(no name given)';
   const email = (m.email ?? '').trim() || '(no email given)';
 
-  try {
-    await admin.firestore().collection('mail').add({
-      to: NOTIFY_TO,
-      message: {
-        subject: `🌱 New waitlist signup: ${name}`,
-        text:
-          `${name} just requested access to the South Austin Community Garden ` +
-          `member portal and is waiting for approval.\n\n` +
-          `  Name:  ${name}\n` +
-          `  Email: ${email}\n\n` +
-          `Review & approve: ${APP_URL}/waitlist\n`,
-      },
-      toName: 'SACG Organizers',
-      createdBy: 'system:waitlist-notify',
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-    logger.info(`Queued waitlist alert for ${email} (${event.params.memberId})`);
-  } catch (err) {
-    logger.error('Failed to queue waitlist alert', err);
-    throw err;
+  const stub = await findRosterStub(m.email ?? '', memberId);
+
+  if (stub) {
+    if (await isVerifiedIdentity(memberId)) {
+      const plotIds = await mergeStubInto(stub, memberId, m);
+      const plotTxt = plotIds.length ? `plot ${plotIds.join(', ')}` : 'no plot on file';
+      logger.info(`Auto-merged ${email} into roster stub ${stub.id}; repointed [${plotIds.join(', ')}]`);
+      await queueMail(
+        `✅ ${name} linked to their garden record`,
+        `${name} (${email}) signed in with a verified account and was automatically ` +
+          `linked to their existing member record (${plotTxt}). ` +
+          `They now have full access — no action needed.\n`,
+      );
+      return;
+    }
+
+    const plotIds = await plotsHeldBy(stub.id);
+    const plotTxt = plotIds.length ? `plot ${plotIds.join(', ')}` : 'no plot on file';
+    logger.info(`Unverified signup ${email} matches roster stub ${stub.id}; awaiting admin merge`);
+    await queueMail(
+      `🌱 Waitlist signup (possible duplicate): ${name}`,
+      `${name} (${email}) just signed up, and it looks like a match for existing ` +
+        `roster member "${stub.get('displayName')}" (${plotTxt}).\n\n` +
+        `They used an unverified email/password, so I did NOT auto-merge. Confirm it's ` +
+        `really them, then use "Approve & merge" on the waitlist:\n${APP_URL}/waitlist\n`,
+    );
+    return;
   }
+
+  logger.info(`New waitlist signup ${email} (${memberId})`);
+  await queueMail(
+    `🌱 New waitlist signup: ${name}`,
+    `${name} just requested access to the South Austin Community Garden member ` +
+      `portal and is waiting for approval.\n\n  Name:  ${name}\n  Email: ${email}\n\n` +
+      `Review & approve: ${APP_URL}/waitlist\n`,
+  );
 });
