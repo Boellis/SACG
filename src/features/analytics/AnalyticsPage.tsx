@@ -43,12 +43,16 @@ function Shell() {
   const seasonYear = Number(data?.settings.currentSeason) || now.getUTCFullYear();
   const w = useMemo(() => resolveWindow(range, now, seasonYear), [range, now, seasonYear]);
 
-  const toggleDemo = () => setDemo((d) => { localStorage.setItem('alx-demo', d ? '0' : '1'); return !d; });
-  const toggleMode = () => setMode((m) => {
-    const next = m === 'light' ? 'dark' : 'light';
+  const toggleDemo = () => {
+    const next = !demo;
+    localStorage.setItem('alx-demo', next ? '1' : '0');
+    setDemo(next);
+  };
+  const toggleMode = () => {
+    const next: VizMode = mode === 'light' ? 'dark' : 'light';
     localStorage.setItem('alx-mode', next);
-    return next;
-  });
+    setMode(next);
+  };
 
   return (
     <div className="alx-root" data-mode={mode}>
