@@ -5,7 +5,7 @@ import {
 } from './analytics';
 import {
   occupancyKpi, duesKpi, activeMembers, memberGrowthSeries, hoursTotal, hoursSeries,
-  participationKpi, waitlistCount, collectedSeries, topVolunteers,
+  participationKpi, participationSeries, waitlistCount, collectedSeries, topVolunteers,
   hoursCohorts, expectedHoursPace, DEFAULT_ORG_SETTINGS, resolveWindow as rw,
 } from './analytics';
 
@@ -181,6 +181,16 @@ describe('growth & participation', () => {
     const k = participationKpi(ms, hs, w);
     expect(k).toEqual({ pct: 0.5, participated: 1, active: 2 });
   });
+  it('participationSeries counts distinct loggers per bucket, not hours', () => {
+    const hs = [
+      hour({ memberId: 'a', hours: 3 }),
+      hour({ id: 'h2', memberId: 'a', hours: 5, date: T(2026, 3, 20) }),
+      hour({ id: 'h3', memberId: 'b', hours: 1, date: T(2026, 4, 2) }),
+    ] as any;
+    const s = participationSeries(hs, w, 'month');
+    expect(s.find((p) => p.label === 'Apr')!.value).toBe(1); // member a twice → 1
+    expect(s.find((p) => p.label === 'May')!.value).toBe(1); // member b
+  });
   it('hoursTotal & hoursSeries respect the window', () => {
     const hs = [hour(), hour({ id: 'h2', date: T(2024, 3, 1), hours: 9 })] as any;
     expect(hoursTotal(hs, w)).toBe(2);
@@ -253,6 +263,9 @@ describe('upkeep tiers', () => {
   });
   it('recent watering with no crops still counts as thriving', () => {
     expect(upkeepTier(plot({ crops: [], lastWateredAt: T(2026, 7, 3) }) as any, NOW)).toBe('thriving');
+  });
+  it('no crops but watered 15-30 days ago is okay (data exists, not stale)', () => {
+    expect(upkeepTier(plot({ crops: [], lastWateredAt: T(2026, 6, 20) }) as any, NOW)).toBe('okay'); // 16 days before Aug 5
   });
   it('distribution only includes assigned plots', () => {
     const d = upkeepDistribution([plot({ crops: [] }), plot({ id: '2', status: 'available' })] as any, NOW);

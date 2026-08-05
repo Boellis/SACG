@@ -179,6 +179,20 @@ export function participationKpi(members: Member[], hours: VolunteerHour[], w: A
   return { pct: act.length === 0 ? 0 : participated / act.length, participated, active: act.length };
 }
 
+export function participationSeries(hours: VolunteerHour[], w: AnalyticsWindow, bucket: Bucket): SeriesPoint[] {
+  const inWin = hours.filter((h) => inRange(h.date as unknown as TsLike, w.start, w.end));
+  const grid = bucketSeries(inWin.map((h) => ({ at: (h.date as unknown as TsLike).toDate(), value: 0 })), w.start, w.end, bucket);
+  return grid.map((p, i) => {
+    const end = i + 1 < grid.length ? grid[i + 1].t : w.end.getTime();
+    const uniq = new Set(
+      inWin
+        .filter((h) => { const t = (h.date as unknown as TsLike).toMillis(); return t >= p.t && t < end; })
+        .map((h) => h.memberId),
+    );
+    return { ...p, value: uniq.size };
+  });
+}
+
 export function waitlistCount(members: Member[]): number {
   return members.filter((m) => m.status === 'pending').length;
 }
@@ -261,7 +275,9 @@ export function upkeepTier(p: Plot, now: Date): UpkeepTier {
   const hasCrops = (p.crops ?? []).length > 0;
   if (wateredFresh || plantedFresh) return 'thriving';
   if (hasCrops) return 'okay';
-  if (watered !== null && t - watered > DAYS_WATER_STALE * 86400_000) return 'attention';
+  if (watered !== null) {
+    return t - watered > DAYS_WATER_STALE * 86400_000 ? 'attention' : 'okay';
+  }
   return 'nodata';
 }
 
@@ -449,7 +465,7 @@ export function buildKpis(d: AnalyticsDataset, w: AnalyticsWindow, now: Date): K
       detail: `${part.participated} of ${part.active} members logged hours`,
       delta: prevPart ? computeDelta(part.participated, prevPart.participated || null) : null,
       goodWhenUp: true,
-      spark: hoursSeries(d.hours, w, bucket).map((p) => p.value),
+      spark: participationSeries(d.hours, w, bucket).map((p) => p.value),
     },
     {
       key: 'hours', label: 'Volunteer hours', display: fmtCompact(hrs),
