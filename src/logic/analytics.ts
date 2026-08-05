@@ -148,7 +148,7 @@ export function memberGrowthSeries(members: Member[], w: AnalyticsWindow, bucket
     .map((m) => joinDate(m))
     .filter((d): d is Date => d !== null)
     .sort((a, b) => a.getTime() - b.getTime());
-  const grid = bucketSeries([], w.start, w.end, bucket);
+  const grid = bucketSeries(joins.map((d) => ({ at: d, value: 0 })), w.start, w.end, bucket);
   return grid.map((p, i) => {
     const bucketEnd = i + 1 < grid.length ? grid[i + 1].t : w.end.getTime();
     return { ...p, value: joins.filter((d) => d.getTime() < bucketEnd).length };

@@ -165,6 +165,16 @@ describe('growth & participation', () => {
     expect(s[1].value).toBe(2);      // Feb: a + b
     expect(s[s.length - 1].value).toBe(2);
   });
+  it("memberGrowthSeries spans history for the 'all' range", () => {
+    const ms = [
+      member({ id: 'a', joinedAt: T(2025, 5, 1) }),
+      member({ id: 'b', joinedAt: T(2026, 1, 10) }),
+    ] as any;
+    const s = memberGrowthSeries(ms, rw('all', NOW, 2026), 'month');
+    expect(s.length).toBeGreaterThan(12);        // Jun 2025 → Aug 2026
+    expect(s[0].value).toBe(1);                  // first bucket: only a
+    expect(s[s.length - 1].value).toBe(2);
+  });
   it('participationKpi = distinct active loggers / active members', () => {
     const ms = [member({ id: 'a' }), member({ id: 'b' }), member({ id: 'c', status: 'pending' })] as any;
     const hs = [hour({ memberId: 'a' }), hour({ id: 'h2', memberId: 'a' })] as any;
