@@ -1,0 +1,75 @@
+/* src/features/analytics/analytics.css
+   Values mirror tokens.ts (the dataviz reference palette). */
+.alx-root {
+  --alx-surface: #fcfcfb;
+  --alx-page: #f9f9f7;
+  --alx-text: #0b0b0b;
+  --alx-text-2: #52514e;
+  --alx-muted: #898781;
+  --alx-grid: #e1e0d9;
+  --alx-border: rgba(11, 11, 11, 0.1);
+  --alx-accent: #2a78d6;
+  --alx-delta-good: #006300;
+  background: var(--alx-page);
+  color: var(--alx-text);
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  margin: -1.5rem;            /* bleed over Layout's p-6 so the page plane is ours */
+  padding: 1.5rem;
+  min-height: calc(100vh - 3.5rem);
+}
+.alx-root[data-mode='dark'] {
+  --alx-surface: #1a1a19;
+  --alx-page: #0d0d0d;
+  --alx-text: #ffffff;
+  --alx-text-2: #c3c2b7;
+  --alx-muted: #898781;
+  --alx-grid: #2c2c2a;
+  --alx-border: rgba(255, 255, 255, 0.1);
+  --alx-accent: #3987e5;
+  --alx-delta-good: #0ca30c;
+}
+.alx-card {
+  background: var(--alx-surface);
+  border: 1px solid var(--alx-border);
+  border-radius: 1rem;
+  padding: 1.25rem;
+  break-inside: avoid;
+}
+.alx-tab {
+  padding: 0.375rem 0.875rem;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--alx-text-2);
+}
+.alx-tab[aria-current='page'] {
+  background: var(--alx-accent);
+  color: #ffffff;
+}
+.alx-badge-demo {
+  background: #fab219;
+  color: #0b0b0b;
+  font-weight: 700;
+  font-size: 0.6875rem;
+  letter-spacing: 0.05em;
+  padding: 0.125rem 0.5rem;
+  border-radius: 9999px;
+}
+.alx-print-header { display: none; }
+
+@media print {
+  /* Print exactly the analytics area, forced light, no app chrome. */
+  body * { visibility: hidden; }
+  .alx-root, .alx-root * { visibility: visible; }
+  .alx-root {
+    position: absolute; inset: 0 auto auto 0; width: 100%;
+    margin: 0; padding: 1rem;
+    --alx-surface: #fcfcfb; --alx-page: #ffffff; --alx-text: #0b0b0b;
+    --alx-text-2: #52514e; --alx-muted: #898781; --alx-grid: #e1e0d9;
+    --alx-border: rgba(11, 11, 11, 0.1); --alx-accent: #2a78d6;
+    --alx-delta-good: #006300;
+  }
+  .alx-controls, .alx-tabs { display: none !important; }
+  .alx-print-header { display: block; margin-bottom: 1rem; }
+  .alx-card { box-shadow: none; }
+}
