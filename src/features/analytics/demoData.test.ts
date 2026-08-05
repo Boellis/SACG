@@ -50,4 +50,9 @@ describe('buildDemoDataset', () => {
     expect(dist.attention.length).toBeGreaterThan(0);
     expect(dist.nodata.length).toBeGreaterThan(0);
   });
+  it('never generates hour entries after now', () => {
+    const d = buildDemoDataset(NOW);
+    const max = Math.max(...d.hours.map((h) => (h.date as any).toMillis()));
+    expect(max).toBeLessThanOrEqual(NOW.getTime());
+  });
 });

@@ -99,7 +99,7 @@ export function buildDemoDataset(now: Date): AnalyticsDataset {
       const who = members[Math.floor(rand() * 62)];
       hours.push({
         id: `demo-h${hid++}`, memberId: who.id,
-        date: demoTs(new Date(d.getTime() + Math.floor(rand() * 6) * 86400_000)),
+        date: demoTs(new Date(Math.min(d.getTime() + Math.floor(rand() * 6) * 86400_000, t))),
         hours: 1 + Math.floor(rand() * 3),
         recordedBy: who.id, createdAt: demoTs(d),
       });
