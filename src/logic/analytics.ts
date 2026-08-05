@@ -241,3 +241,225 @@ export function hoursCohorts(
   }
   return out;
 }
+
+import type { GardenEvent, ForumThread, Poll, PollVote, Rsvp } from '../lib/types';
+
+export type UpkeepTier = 'thriving' | 'okay' | 'attention' | 'nodata';
+
+const DAYS_WATER_FRESH = 14;
+const DAYS_PLANT_FRESH = 120;
+const DAYS_WATER_STALE = 30;
+
+export function upkeepTier(p: Plot, now: Date): UpkeepTier {
+  const t = now.getTime();
+  const watered = p.lastWateredAt ? (p.lastWateredAt as unknown as TsLike).toMillis() : null;
+  const wateredFresh = watered !== null && t - watered <= DAYS_WATER_FRESH * 86400_000;
+  const planted = (p.crops ?? [])
+    .map((c) => (c.plantedOn ? (c.plantedOn as unknown as TsLike).toMillis() : null))
+    .filter((x): x is number => x !== null);
+  const plantedFresh = planted.some((x) => t - x <= DAYS_PLANT_FRESH * 86400_000);
+  const hasCrops = (p.crops ?? []).length > 0;
+  if (wateredFresh || plantedFresh) return 'thriving';
+  if (hasCrops) return 'okay';
+  if (watered !== null && t - watered > DAYS_WATER_STALE * 86400_000) return 'attention';
+  return 'nodata';
+}
+
+export function upkeepDistribution(plots: Plot[], now: Date): Record<UpkeepTier, Plot[]> {
+  const out: Record<UpkeepTier, Plot[]> = { thriving: [], okay: [], attention: [], nodata: [] };
+  for (const p of plots) {
+    if (p.status !== 'assigned') continue;
+    out[upkeepTier(p, now)].push(p);
+  }
+  return out;
+}
+
+export function cropPopularity(plots: Plot[], topN = 8): { name: string; count: number }[] {
+  const counts = new Map<string, number>();
+  for (const p of plots) {
+    for (const c of p.crops ?? []) {
+      const name = c.name.trim().toLowerCase();
+      if (!name) continue;
+      counts.set(name, (counts.get(name) ?? 0) + 1);
+    }
+  }
+  const sorted = [...counts.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  if (sorted.length <= topN) return sorted;
+  const head = sorted.slice(0, topN);
+  const other = sorted.slice(topN).reduce((s, r) => s + r.count, 0);
+  return [...head, { name: 'Other', count: other }];
+}
+
+export interface TierRollup {
+  tier: string; amount: number; expected: number; collected: number;
+  outstanding: number; plots: Plot[]; unpaid: Plot[];
+}
+
+export function duesByTier(plots: Plot[]): TierRollup[] {
+  const assigned = plots.filter((p) => p.status === 'assigned');
+  const byAmount = new Map<number, Plot[]>();
+  for (const p of assigned) {
+    const a = p.duesAmount || 0;
+    byAmount.set(a, [...(byAmount.get(a) ?? []), p]);
+  }
+  return [...byAmount.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([amount, ps]) => {
+      const collected = ps.filter((p) => p.duesPaid).reduce((s, p) => s + (p.duesAmount || 0), 0);
+      const expected = ps.reduce((s, p) => s + (p.duesAmount || 0), 0);
+      return {
+        tier: `$${amount}`, amount, expected, collected,
+        outstanding: expected - collected, plots: ps, unpaid: ps.filter((p) => !p.duesPaid),
+      };
+    });
+}
+
+export interface DuesHistoryRow { season: string; tier: string; amount: number }
+
+export function currentSeasonDuesHistory(plots: Plot[]): DuesHistoryRow[] {
+  return duesByTier(plots).map((t) => ({
+    season: plots[0]?.season ?? '', tier: t.tier, amount: t.amount,
+  }));
+}
+
+export function duesIncreaseTable(history: DuesHistoryRow[]) {
+  const seasons = [...new Set(history.map((h) => h.season))].sort();
+  const tiers = [...new Set(history.map((h) => h.tier))]
+    .sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
+  const rows = tiers.map((tier) => {
+    const amounts = seasons.map((s) => history.find((h) => h.season === s && h.tier === tier)?.amount ?? null);
+    const pctChanges = amounts.map((a, i) => {
+      if (i === 0 || a === null) return null;
+      const prev = amounts[i - 1];
+      if (prev === null || prev === 0) return null;
+      return Math.round(((a - prev) / prev) * 100);
+    });
+    return { tier, amounts, pctChanges };
+  });
+  return { seasons, rows };
+}
+
+export function splitPlotUtilization(plots: Plot[]) {
+  const wholes = plots.filter((p) => p.half === 'whole');
+  const halves = plots.filter((p) => p.half !== 'whole');
+  return {
+    wholes: wholes.length,
+    assignedWholes: wholes.filter((p) => p.status === 'assigned').length,
+    halves: halves.length,
+    assignedHalves: halves.filter((p) => p.status === 'assigned').length,
+  };
+}
+
+function createdSeries(items: { createdAt?: unknown }[], w: AnalyticsWindow, bucket: Bucket): SeriesPoint[] {
+  const pts = items
+    .filter((x) => inRange(x.createdAt as TsLike | undefined, w.start, w.end))
+    .map((x) => ({ at: (x.createdAt as TsLike).toDate(), value: 1 }));
+  return bucketSeries(pts, w.start, w.end, bucket);
+}
+
+export function threadsSeries(threads: ForumThread[], w: AnalyticsWindow, bucket: Bucket): SeriesPoint[] {
+  return createdSeries(threads, w, bucket);
+}
+export function votesSeries(votes: PollVote[], w: AnalyticsWindow, bucket: Bucket): SeriesPoint[] {
+  return createdSeries(votes, w, bucket);
+}
+
+export function rsvpBreakdown(rsvps: Rsvp[]) {
+  return {
+    yes: rsvps.filter((r) => r.status === 'yes').length,
+    maybe: rsvps.filter((r) => r.status === 'maybe').length,
+    no: rsvps.filter((r) => r.status === 'no').length,
+  };
+}
+
+export function nextEvent(events: GardenEvent[], now: Date): GardenEvent | null {
+  const t = now.getTime();
+  const upcoming = events
+    .filter((e) => (e.end as unknown as TsLike).toMillis() > t)
+    .sort((a, b) => (a.start as unknown as TsLike).toMillis() - (b.start as unknown as TsLike).toMillis());
+  return upcoming[0] ?? null;
+}
+
+export function openPollCount(polls: Poll[], now: Date): number {
+  const t = now.getTime();
+  return polls.filter((p) => {
+    if (p.closed) return false;
+    if (!p.expiresAt) return true;
+    return (p.expiresAt as unknown as TsLike).toMillis() > t;
+  }).length;
+}
+
+export interface AnalyticsDataset {
+  members: Member[]; plots: Plot[]; hours: VolunteerHour[];
+  events: GardenEvent[]; threads: ForumThread[]; polls: Poll[];
+  rsvpsByEvent: Record<string, Rsvp[]>;
+  votesByPoll: Record<string, PollVote[]>;
+  duesHistory: DuesHistoryRow[];
+  settings: OrgSettings;
+}
+
+export interface KpiDatum {
+  key: string;
+  label: string;
+  display: string;
+  detail: string;
+  delta: Delta | null;
+  goodWhenUp: boolean;
+  spark: number[] | null;
+}
+
+/** Six Overview tiles. Sparklines only where the metric has real history —
+ * occupancy & waitlist are point-in-time, so they carry none. */
+export function buildKpis(d: AnalyticsDataset, w: AnalyticsWindow, now: Date): KpiDatum[] {
+  const bucket = bucketFor(w.key);
+  const occ = occupancyKpi(d.plots);
+  const dues = duesKpi(d.plots);
+  const act = activeMembers(d.members);
+  const part = participationKpi(d.members, d.hours, w);
+  const hrs = hoursTotal(d.hours, w);
+  const prevW: AnalyticsWindow | null = w.prevStart && w.prevEnd
+    ? { ...w, start: w.prevStart, end: w.prevEnd, prevStart: null, prevEnd: null }
+    : null;
+  const prevHours = prevW ? hoursTotal(d.hours, prevW) : null;
+  const prevPart = prevW ? participationKpi(d.members, d.hours, prevW) : null;
+  const growth = memberGrowthSeries(d.members, w, bucket);
+  const growthStart = growth[0]?.value ?? 0;
+  const growthEnd = growth[growth.length - 1]?.value ?? 0;
+  return [
+    {
+      key: 'occupancy', label: 'Plot occupancy', display: fmtPct(occ.pct),
+      detail: `${occ.occupied} of ${occ.total} plots`, delta: null, goodWhenUp: true, spark: null,
+    },
+    {
+      key: 'dues', label: 'Dues collected', display: fmtCurrency(dues.collected),
+      detail: `${fmtPct(dues.rate)} of ${fmtCurrency(dues.expected)}`,
+      delta: null, goodWhenUp: true,
+      spark: collectedSeries(d.plots, w, bucket).map((p) => p.value),
+    },
+    {
+      key: 'members', label: 'Active members', display: fmtCompact(act.length),
+      detail: w.prevStart ? `${growthEnd - growthStart >= 0 ? '+' : ''}${growthEnd - growthStart} in ${w.label}` : 'all time',
+      delta: computeDelta(growthEnd, growthStart || null), goodWhenUp: true,
+      spark: growth.map((p) => p.value),
+    },
+    {
+      key: 'participation', label: 'Participation rate', display: fmtPct(part.pct),
+      detail: `${part.participated} of ${part.active} members logged hours`,
+      delta: prevPart ? computeDelta(part.participated, prevPart.participated || null) : null,
+      goodWhenUp: true,
+      spark: hoursSeries(d.hours, w, bucket).map((p) => p.value),
+    },
+    {
+      key: 'hours', label: 'Volunteer hours', display: fmtCompact(hrs),
+      detail: w.label,
+      delta: computeDelta(hrs, prevHours), goodWhenUp: true,
+      spark: hoursSeries(d.hours, w, bucket).map((p) => p.value),
+    },
+    {
+      key: 'waitlist', label: 'Waitlist', display: fmtCompact(waitlistCount(d.members)),
+      detail: 'pending applications', delta: null, goodWhenUp: false, spark: null,
+    },
+  ];
+}

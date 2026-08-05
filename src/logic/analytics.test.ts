@@ -230,3 +230,124 @@ describe('hours cohorts', () => {
     expect(c.behind.map((m) => m.id)).toEqual(['behind']);
   });
 });
+
+import {
+  upkeepTier, upkeepDistribution, cropPopularity, duesByTier,
+  currentSeasonDuesHistory, duesIncreaseTable, splitPlotUtilization,
+  threadsSeries, votesSeries, rsvpBreakdown, nextEvent, openPollCount, buildKpis,
+} from './analytics';
+
+describe('upkeep tiers', () => {
+  const NOW = new Date(Date.UTC(2026, 7, 5));
+  it('thriving on fresh watering or fresh planting', () => {
+    expect(upkeepTier(plot({ crops: [{ name: 'kale' }], lastWateredAt: T(2026, 7, 1) }) as any, NOW)).toBe('thriving');
+    expect(upkeepTier(plot({ crops: [{ name: 'kale', plantedOn: T(2026, 5, 1) }] }) as any, NOW)).toBe('thriving');
+  });
+  it('okay = crops but stale/no signals (incl. undated crops)', () => {
+    expect(upkeepTier(plot({ crops: [{ name: 'corn' }] }) as any, NOW)).toBe('okay');
+    expect(upkeepTier(plot({ crops: [{ name: 'corn', plantedOn: T(2025, 1, 1) }] }) as any, NOW)).toBe('okay');
+  });
+  it('attention = no crops AND stale watering; nodata = no signals at all', () => {
+    expect(upkeepTier(plot({ crops: [], lastWateredAt: T(2026, 4, 1) }) as any, NOW)).toBe('attention');
+    expect(upkeepTier(plot({ crops: [] }) as any, NOW)).toBe('nodata');
+  });
+  it('recent watering with no crops still counts as thriving', () => {
+    expect(upkeepTier(plot({ crops: [], lastWateredAt: T(2026, 7, 3) }) as any, NOW)).toBe('thriving');
+  });
+  it('distribution only includes assigned plots', () => {
+    const d = upkeepDistribution([plot({ crops: [] }), plot({ id: '2', status: 'available' })] as any, NOW);
+    expect(d.nodata.length).toBe(1);
+    expect(d.thriving.length + d.okay.length + d.attention.length).toBe(0);
+  });
+});
+
+describe('crops, tiers, split utilization', () => {
+  it('cropPopularity counts case-insensitively and folds the tail into Other', () => {
+    const ps = [
+      plot({ crops: [{ name: 'Kale' }, { name: 'corn' }] }),
+      plot({ id: '2', crops: [{ name: 'kale' }] }),
+    ] as any;
+    const top = cropPopularity(ps, 1);
+    expect(top[0]).toEqual({ name: 'kale', count: 2 });
+    expect(top[1]).toEqual({ name: 'Other', count: 1 });
+  });
+  it('duesByTier groups by duesAmount ascending', () => {
+    const ps = [
+      plot({ duesAmount: 42, duesPaid: true }),
+      plot({ id: '2', duesAmount: 42 }),
+      plot({ id: '3', duesAmount: 69 }),
+    ] as any;
+    const tiers = duesByTier(ps);
+    expect(tiers.map((t) => t.tier)).toEqual(['$42', '$69']);
+    expect(tiers[0]).toMatchObject({ collected: 42, outstanding: 42 });
+    expect(tiers[0].unpaid.length).toBe(1);
+  });
+  it('duesIncreaseTable pivots seasons × tiers with % change', () => {
+    const t = duesIncreaseTable([
+      { season: '2025', tier: '$42', amount: 40 },
+      { season: '2026', tier: '$42', amount: 42 },
+      { season: '2026', tier: '$69', amount: 69 },
+    ]);
+    expect(t.seasons).toEqual(['2025', '2026']);
+    const r42 = t.rows.find((r) => r.tier === '$42')!;
+    expect(r42.amounts).toEqual([40, 42]);
+    expect(r42.pctChanges).toEqual([null, 5]);
+    const r69 = t.rows.find((r) => r.tier === '$69')!;
+    expect(r69.amounts).toEqual([null, 69]);
+  });
+  it('splitPlotUtilization counts wholes vs halves', () => {
+    const ps = [plot(), plot({ id: '9A', half: 'A' }), plot({ id: '9B', half: 'B', status: 'available' })] as any;
+    expect(splitPlotUtilization(ps)).toEqual({ wholes: 1, assignedWholes: 1, halves: 2, assignedHalves: 1 });
+  });
+});
+
+describe('engagement helpers', () => {
+  const NOW = new Date(Date.UTC(2026, 7, 5));
+  const w = rw('season', NOW, 2026);
+  it('threads/votes series bucket by createdAt', () => {
+    const th = [{ id: 't', title: '', body: '', authorId: '', authorName: '', createdAt: T(2026, 1, 2) }] as any;
+    expect(threadsSeries(th, w, 'month').find((p) => p.label === 'Feb')!.value).toBe(1);
+    const vs = [{ id: 'v', optionId: '0', memberId: 'm', createdAt: T(2026, 2, 2) }] as any;
+    expect(votesSeries(vs, w, 'month').find((p) => p.label === 'Mar')!.value).toBe(1);
+  });
+  it('rsvpBreakdown tallies statuses', () => {
+    const rs = [{ status: 'yes' }, { status: 'yes' }, { status: 'maybe' }, { status: 'no' }] as any;
+    expect(rsvpBreakdown(rs)).toEqual({ yes: 2, maybe: 1, no: 1 });
+  });
+  it('nextEvent = earliest event ending after now; openPollCount uses isPollOpen semantics', () => {
+    const evs = [
+      { id: 'past', start: T(2026, 0, 1), end: T(2026, 0, 2) },
+      { id: 'next', start: T(2026, 8, 1), end: T(2026, 8, 2) },
+      { id: 'later', start: T(2026, 9, 1), end: T(2026, 9, 2) },
+    ] as any;
+    expect(nextEvent(evs, NOW)!.id).toBe('next');
+    const polls = [
+      { id: 'open', closed: false },
+      { id: 'closed', closed: true },
+      { id: 'expired', closed: false, expiresAt: T(2026, 0, 1) },
+    ] as any;
+    expect(openPollCount(polls, NOW)).toBe(1);
+  });
+});
+
+describe('buildKpis', () => {
+  it('produces the six tiles in order with formatted values', () => {
+    const NOW = new Date(Date.UTC(2026, 7, 5));
+    const w = rw('season', NOW, 2026);
+    const d = {
+      members: [member()], plots: [plot()], hours: [hour()],
+      events: [], threads: [], polls: [], rsvpsByEvent: {}, votesByPoll: {},
+      duesHistory: [], settings: DEFAULT_ORG_SETTINGS,
+    } as any;
+    const kpis = buildKpis(d, w, NOW);
+    expect(kpis.map((k) => k.key)).toEqual(
+      ['occupancy', 'dues', 'members', 'participation', 'hours', 'waitlist'],
+    );
+    expect(kpis[0].display).toBe('100%');
+    expect(kpis[4].display).toBe('2');
+    // no fabricated history: occupancy & waitlist have no sparkline
+    expect(kpis[0].spark).toBeNull();
+    expect(kpis[5].spark).toBeNull();
+    expect(kpis[4].spark!.length).toBeGreaterThan(0);
+  });
+});
