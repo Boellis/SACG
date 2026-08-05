@@ -3,6 +3,11 @@ import {
   resolveWindow, inRange, bucketFor, bucketSeries, computeDelta,
   fmtCompact, fmtCurrency, fmtPct,
 } from './analytics';
+import {
+  occupancyKpi, duesKpi, activeMembers, memberGrowthSeries, hoursTotal, hoursSeries,
+  participationKpi, waitlistCount, collectedSeries, topVolunteers,
+  hoursCohorts, expectedHoursPace, DEFAULT_ORG_SETTINGS, resolveWindow as rw,
+} from './analytics';
 
 const NOW = new Date(Date.UTC(2026, 7, 5, 12)); // Aug 5 2026 12:00Z
 const ts = (d: Date) => ({ toDate: () => d, toMillis: () => d.getTime() });
@@ -110,5 +115,108 @@ describe('bucketFor / computeDelta / formatters', () => {
     expect(fmtCompact(12900)).toBe('12.9K');
     expect(fmtCurrency(1730)).toBe('$1,730');
     expect(fmtPct(0.976)).toBe('98%');
+  });
+});
+
+const T = (y: number, m: number, d: number) =>
+  ({ toDate: () => new Date(Date.UTC(y, m, d)), toMillis: () => Date.UTC(y, m, d) }) as any;
+
+const member = (o: any = {}) => ({
+  id: 'm1', uid: 'm1', email: 'a@b.c', displayName: 'A', role: 'member',
+  status: 'active', createdAt: T(2026, 0, 1), currentYearHours: 0, ...o,
+});
+const plot = (o: any = {}) => ({
+  id: '1', number: 1, half: 'whole', status: 'assigned', duesAmount: 42,
+  depositAmount: 25, duesPaid: false, depositPaid: false, season: '2026', crops: [], ...o,
+});
+const hour = (o: any = {}) => ({
+  id: 'h1', memberId: 'm1', date: T(2026, 3, 10), hours: 2, recordedBy: 'm1',
+  createdAt: T(2026, 3, 10), ...o,
+});
+
+describe('occupancy & dues KPIs', () => {
+  it('occupancy counts assigned / total', () => {
+    const k = occupancyKpi([plot(), plot({ id: '2', status: 'available' })] as any);
+    expect(k).toEqual({ occupied: 1, total: 2, pct: 0.5 });
+  });
+  it('duesKpi wraps computeDuesRollup with a rate', () => {
+    const k = duesKpi([
+      plot({ duesPaid: true, duesAmount: 40 }),
+      plot({ id: '2', duesAmount: 60 }),
+    ] as any);
+    expect(k.collected).toBe(40);
+    expect(k.expected).toBe(100);
+    expect(k.rate).toBe(0.4);
+    expect(k.unpaid.length).toBe(1);
+  });
+});
+
+describe('growth & participation', () => {
+  const NOW = new Date(Date.UTC(2026, 7, 5));
+  const w = rw('season', NOW, 2026);
+  it('memberGrowthSeries is cumulative and excludes pending', () => {
+    const ms = [
+      member({ id: 'a', joinedAt: T(2025, 5, 1) }),
+      member({ id: 'b', joinedAt: T(2026, 1, 10) }),
+      member({ id: 'c', status: 'pending', createdAt: T(2026, 2, 1) }),
+    ] as any;
+    const s = memberGrowthSeries(ms, w, 'month');
+    expect(s[0].value).toBe(1);      // Jan 2026: only a
+    expect(s[1].value).toBe(2);      // Feb: a + b
+    expect(s[s.length - 1].value).toBe(2);
+  });
+  it('participationKpi = distinct active loggers / active members', () => {
+    const ms = [member({ id: 'a' }), member({ id: 'b' }), member({ id: 'c', status: 'pending' })] as any;
+    const hs = [hour({ memberId: 'a' }), hour({ id: 'h2', memberId: 'a' })] as any;
+    const k = participationKpi(ms, hs, w);
+    expect(k).toEqual({ pct: 0.5, participated: 1, active: 2 });
+  });
+  it('hoursTotal & hoursSeries respect the window', () => {
+    const hs = [hour(), hour({ id: 'h2', date: T(2024, 3, 1), hours: 9 })] as any;
+    expect(hoursTotal(hs, w)).toBe(2);
+    const s = hoursSeries(hs, w, 'month');
+    expect(s.find((p) => p.label === 'Apr')!.value).toBe(2);
+  });
+  it('collectedSeries uses paidDate of paid plots', () => {
+    const ps = [
+      plot({ duesPaid: true, paidDate: T(2026, 2, 15), duesAmount: 42 }),
+      plot({ id: '2', duesPaid: false }),
+    ] as any;
+    const s = collectedSeries(ps, w, 'month');
+    expect(s.find((p) => p.label === 'Mar')!.value).toBe(42);
+  });
+  it('waitlistCount counts pending', () => {
+    expect(waitlistCount([member(), member({ id: 'x', status: 'pending' })] as any)).toBe(1);
+  });
+  it('topVolunteers ranks by window hours', () => {
+    const ms = [member({ id: 'a', displayName: 'A' }), member({ id: 'b', displayName: 'B' })] as any;
+    const hs = [hour({ memberId: 'b', hours: 5 }), hour({ id: 'h2', memberId: 'a', hours: 2 })] as any;
+    const top = topVolunteers(ms, hs, w, 8);
+    expect(top[0].member.id).toBe('b');
+    expect(top[0].hours).toBe(5);
+  });
+});
+
+describe('hours cohorts', () => {
+  it('pace: linear to firstHalfHours through June, then to requiredHours', () => {
+    const s = DEFAULT_ORG_SETTINGS;
+    expect(expectedHoursPace(s, new Date(Date.UTC(2026, 6, 1)))).toBe(6);            // exactly mid-year
+    expect(expectedHoursPace(s, new Date(Date.UTC(2026, 2, 31)))).toBeCloseTo(3, 0); // ~end of March
+    expect(expectedHoursPace(s, new Date(Date.UTC(2026, 11, 31)))).toBeCloseTo(12, 0);
+  });
+  it('buckets done / onTrack / behind', () => {
+    const NOW = new Date(Date.UTC(2026, 5, 30)); // pace ≈ 5.97
+    const ms = [
+      member({ id: 'done' }), member({ id: 'ok' }), member({ id: 'behind' }),
+    ] as any;
+    const hs = [
+      hour({ memberId: 'done', hours: 12, date: T(2026, 1, 1) }),
+      hour({ id: 'h2', memberId: 'ok', hours: 7, date: T(2026, 1, 2) }),
+      hour({ id: 'h3', memberId: 'behind', hours: 1, date: T(2026, 1, 3) }),
+    ] as any;
+    const c = hoursCohorts(ms, hs, DEFAULT_ORG_SETTINGS, NOW);
+    expect(c.done.map((m) => m.id)).toEqual(['done']);
+    expect(c.onTrack.map((m) => m.id)).toEqual(['ok']);
+    expect(c.behind.map((m) => m.id)).toEqual(['behind']);
   });
 });

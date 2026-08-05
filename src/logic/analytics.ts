@@ -113,3 +113,131 @@ export function fmtCurrency(n: number): string {
 export function fmtPct(ratio: number): string {
   return `${Math.round(ratio * 100)}%`;
 }
+
+import type { Member, Plot, VolunteerHour, OrgSettings } from '../lib/types';
+import { computeDuesRollup } from './dues';
+
+export const DEFAULT_ORG_SETTINGS: OrgSettings = {
+  requiredHours: 12, firstHalfHours: 6, firstHalfMonths: 6,
+  defaultDeposit: 25, currentSeason: '2026', contactEmail: '',
+};
+
+export function occupancyKpi(plots: Plot[]) {
+  const occupied = plots.filter((p) => p.status === 'assigned').length;
+  const total = plots.length;
+  return { occupied, total, pct: total === 0 ? 0 : occupied / total };
+}
+
+export function duesKpi(plots: Plot[]) {
+  const r = computeDuesRollup(plots);
+  return { ...r, rate: r.expected === 0 ? 0 : r.collected / r.expected };
+}
+
+export function activeMembers(members: Member[]): Member[] {
+  return members.filter((m) => m.status === 'active');
+}
+
+export function joinDate(m: Member): Date | null {
+  const ts = (m.joinedAt ?? m.createdAt) as unknown as TsLike | undefined;
+  return ts ? ts.toDate() : null;
+}
+
+export function memberGrowthSeries(members: Member[], w: AnalyticsWindow, bucket: Bucket): SeriesPoint[] {
+  const joins = members
+    .filter((m) => m.status !== 'pending')
+    .map((m) => joinDate(m))
+    .filter((d): d is Date => d !== null)
+    .sort((a, b) => a.getTime() - b.getTime());
+  const grid = bucketSeries([], w.start, w.end, bucket);
+  return grid.map((p, i) => {
+    const bucketEnd = i + 1 < grid.length ? grid[i + 1].t : w.end.getTime();
+    return { ...p, value: joins.filter((d) => d.getTime() < bucketEnd).length };
+  });
+}
+
+export function hoursTotal(hours: VolunteerHour[], w: AnalyticsWindow): number {
+  return hours
+    .filter((h) => inRange(h.date as unknown as TsLike, w.start, w.end))
+    .reduce((s, h) => s + h.hours, 0);
+}
+
+export function hoursSeries(hours: VolunteerHour[], w: AnalyticsWindow, bucket: Bucket): SeriesPoint[] {
+  const items = hours
+    .filter((h) => inRange(h.date as unknown as TsLike, w.start, w.end))
+    .map((h) => ({ at: (h.date as unknown as TsLike).toDate(), value: h.hours }));
+  return bucketSeries(items, w.start, w.end, bucket);
+}
+
+export function participationKpi(members: Member[], hours: VolunteerHour[], w: AnalyticsWindow) {
+  const act = activeMembers(members);
+  const loggers = new Set(
+    hours
+      .filter((h) => inRange(h.date as unknown as TsLike, w.start, w.end))
+      .map((h) => h.memberId),
+  );
+  const participated = act.filter((m) => loggers.has(m.id)).length;
+  return { pct: act.length === 0 ? 0 : participated / act.length, participated, active: act.length };
+}
+
+export function waitlistCount(members: Member[]): number {
+  return members.filter((m) => m.status === 'pending').length;
+}
+
+export function collectedSeries(plots: Plot[], w: AnalyticsWindow, bucket: Bucket): SeriesPoint[] {
+  const items = plots
+    .filter((p) => p.duesPaid && p.paidDate && inRange(p.paidDate as unknown as TsLike, w.start, w.end))
+    .map((p) => ({ at: (p.paidDate as unknown as TsLike).toDate(), value: p.duesAmount || 0 }));
+  return bucketSeries(items, w.start, w.end, bucket);
+}
+
+export function topVolunteers(members: Member[], hours: VolunteerHour[], w: AnalyticsWindow, n = 8) {
+  const byMember = new Map<string, number>();
+  for (const h of hours) {
+    if (!inRange(h.date as unknown as TsLike, w.start, w.end)) continue;
+    byMember.set(h.memberId, (byMember.get(h.memberId) ?? 0) + h.hours);
+  }
+  return members
+    .map((m) => ({ member: m, hours: byMember.get(m.id) ?? 0 }))
+    .filter((r) => r.hours > 0)
+    .sort((a, b) => b.hours - a.hours)
+    .slice(0, n);
+}
+
+export type CohortKey = 'done' | 'onTrack' | 'behind';
+
+/** Linear pace to firstHalfHours by end of June, then on to requiredHours by year-end. */
+export function expectedHoursPace(settings: OrgSettings, now: Date): number {
+  const year = now.getUTCFullYear();
+  const yearStart = Date.UTC(year, 0, 1);
+  const midYear = Date.UTC(year, 6, 1);
+  const yearEnd = Date.UTC(year + 1, 0, 1);
+  const t = now.getTime();
+  if (t <= midYear) {
+    return settings.firstHalfHours * ((t - yearStart) / (midYear - yearStart));
+  }
+  return (
+    settings.firstHalfHours +
+    (settings.requiredHours - settings.firstHalfHours) * ((t - midYear) / (yearEnd - midYear))
+  );
+}
+
+export function hoursCohorts(
+  members: Member[], hours: VolunteerHour[], settings: OrgSettings, now: Date,
+): Record<CohortKey, Member[]> {
+  const year = now.getUTCFullYear();
+  const pace = expectedHoursPace(settings, now);
+  const byMember = new Map<string, number>();
+  for (const h of hours) {
+    const d = (h.date as unknown as TsLike).toDate();
+    if (d.getUTCFullYear() !== year) continue;
+    byMember.set(h.memberId, (byMember.get(h.memberId) ?? 0) + h.hours);
+  }
+  const out: Record<CohortKey, Member[]> = { done: [], onTrack: [], behind: [] };
+  for (const m of activeMembers(members)) {
+    const ytd = byMember.get(m.id) ?? 0;
+    if (ytd >= settings.requiredHours) out.done.push(m);
+    else if (ytd >= pace) out.onTrack.push(m);
+    else out.behind.push(m);
+  }
+  return out;
+}
