@@ -91,6 +91,13 @@ function AdminDashboard({ displayName }: { displayName: string }) {
           <p className="text-sm text-gray-500 mt-1">hours logged</p>
         </Card>
 
+        <Card title="Analytics">
+          <p className="text-sm text-gray-500">Occupancy, dues, participation & upkeep — committee-ready.</p>
+          <Link to="/analytics">
+            <Button variant="secondary" className="mt-4 w-full">Open Analytics →</Button>
+          </Link>
+        </Card>
+
       </div>
     </div>
   );

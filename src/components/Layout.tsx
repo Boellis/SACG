@@ -23,6 +23,7 @@ const memberNavItems: NavItem[] = [
 ];
 
 const adminNavItems: NavItem[] = [
+  { to: '/analytics', label: 'Analytics' },
   { to: '/members', label: 'Members' },
   { to: '/waitlist', label: 'Waitlist' },
   { to: '/dues', label: 'Dues' },

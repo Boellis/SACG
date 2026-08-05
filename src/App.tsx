@@ -13,6 +13,9 @@ import PlotDetail from './features/plots/PlotDetail';
 // chunk and only fetched when a member opens the Whole Garden page (same approach
 // PlotDetail uses for its 3D layout card).
 const WholeGardenPage = lazy(() => import('./features/plots/WholeGardenPage'));
+// Lazy-loaded so Recharts (and later chart-heavy tabs) stay out of the main bundle
+// until an admin opens the analytics dashboard.
+const AnalyticsPage = lazy(() => import('./features/analytics/AnalyticsPage'));
 import MembersPage from './features/members/MembersPage';
 import WaitlistPage from './features/members/WaitlistPage';
 import MemberDetail from './features/members/MemberDetail';
@@ -61,6 +64,14 @@ export default function App() {
               <Route path="/documents" element={<DocumentsPage />} />
               <Route path="/polls" element={<PollsPage />} />
               <Route element={<RequireAdmin />}>
+                <Route
+                  path="/analytics/*"
+                  element={
+                    <Suspense fallback={<div className="p-6 text-gray-500 text-sm">Loading analytics…</div>}>
+                      <AnalyticsPage />
+                    </Suspense>
+                  }
+                />
                 <Route path="/members" element={<MembersPage />} />
                 <Route path="/members/:id" element={<MemberDetail />} />
                 <Route path="/waitlist" element={<WaitlistPage />} />
