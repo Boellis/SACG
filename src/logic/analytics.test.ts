@@ -4,7 +4,7 @@ import {
   fmtCompact, fmtCurrency, fmtPct,
 } from './analytics';
 import {
-  occupancyKpi, duesKpi, activeMembers, memberGrowthSeries, hoursTotal, hoursSeries,
+  occupancyKpi, duesKpi, memberGrowthSeries, hoursTotal, hoursSeries,
   participationKpi, participationSeries, waitlistCount, collectedSeries, topVolunteers,
   hoursCohorts, expectedHoursPace, DEFAULT_ORG_SETTINGS, resolveWindow as rw,
 } from './analytics';
@@ -243,7 +243,7 @@ describe('hours cohorts', () => {
 
 import {
   upkeepTier, upkeepDistribution, cropPopularity, duesByTier,
-  currentSeasonDuesHistory, duesIncreaseTable, splitPlotUtilization,
+  duesIncreaseTable, splitPlotUtilization,
   threadsSeries, votesSeries, rsvpBreakdown, nextEvent, openPollCount, buildKpis,
 } from './analytics';
 

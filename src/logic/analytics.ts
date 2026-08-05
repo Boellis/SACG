@@ -428,7 +428,7 @@ export interface KpiDatum {
 
 /** Six Overview tiles. Sparklines only where the metric has real history —
  * occupancy & waitlist are point-in-time, so they carry none. */
-export function buildKpis(d: AnalyticsDataset, w: AnalyticsWindow, now: Date): KpiDatum[] {
+export function buildKpis(d: AnalyticsDataset, w: AnalyticsWindow, _now: Date): KpiDatum[] {
   const bucket = bucketFor(w.key);
   const occ = occupancyKpi(d.plots);
   const dues = duesKpi(d.plots);
