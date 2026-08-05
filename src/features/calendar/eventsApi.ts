@@ -5,6 +5,7 @@ import {
   deleteDoc,
   setDoc,
   onSnapshot,
+  getDocs,
   query,
   orderBy,
   serverTimestamp,
@@ -70,4 +71,10 @@ export async function setRsvp(
 
 export function listenRsvps(eventId: string, cb: (rsvps: Rsvp[]) => void): Unsubscribe {
   return onSnapshot(rsvpsCol(eventId), (snap) => cb(snap.docs.map((d) => d.data())));
+}
+
+/** One-shot read of an event's RSVPs (bounded, for analytics reads). */
+export async function fetchRsvps(eventId: string): Promise<Rsvp[]> {
+  const snap = await getDocs(rsvpsCol(eventId));
+  return snap.docs.map((d) => d.data());
 }

@@ -1,5 +1,6 @@
 import {
   onSnapshot,
+  getDocs,
   addDoc,
   deleteDoc,
   setDoc,
@@ -26,6 +27,12 @@ export function listenVotes(pollId: string, cb: (votes: PollVote[]) => void): Un
   return onSnapshot(votesCol(pollId), (snap) => {
     cb(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<PollVote, 'id'>) })));
   });
+}
+
+/** One-shot read of a poll's votes (bounded, for analytics reads). */
+export async function fetchVotes(pollId: string): Promise<PollVote[]> {
+  const snap = await getDocs(votesCol(pollId));
+  return snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<PollVote, 'id'>) }));
 }
 
 // ---------------------------------------------------------------------------

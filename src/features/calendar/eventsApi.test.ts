@@ -7,6 +7,7 @@ vi.mock('firebase/firestore', () => {
   const updateDoc = vi.fn().mockResolvedValue(undefined);
   const setDoc = vi.fn().mockResolvedValue(undefined);
   const onSnapshot = vi.fn(() => vi.fn());
+  const getDocs = vi.fn();
   const query = vi.fn((...args: unknown[]) => ({ _query: args }));
   const orderBy = vi.fn((...args: unknown[]) => ({ _orderBy: args }));
   const doc = vi.fn((_db: unknown, ...args: unknown[]) => ({ _path: args.join('/') }));
@@ -15,7 +16,7 @@ vi.mock('firebase/firestore', () => {
   const Timestamp = {
     fromDate: vi.fn((d: Date) => ({ seconds: Math.floor(d.getTime() / 1000), _isTimestamp: true })),
   };
-  return { addDoc, deleteDoc, updateDoc, setDoc, onSnapshot, query, orderBy, doc, collection, serverTimestamp, Timestamp };
+  return { addDoc, deleteDoc, updateDoc, setDoc, onSnapshot, getDocs, query, orderBy, doc, collection, serverTimestamp, Timestamp };
 });
 
 // Mock firebase lib
@@ -34,7 +35,7 @@ vi.mock('../../data/collections', () => {
 });
 
 import * as firestoreMod from 'firebase/firestore';
-import { createEvent, setRsvp, deleteEvent, updateEvent } from './eventsApi';
+import { createEvent, setRsvp, deleteEvent, updateEvent, fetchRsvps } from './eventsApi';
 
 const mockedAddDoc = vi.mocked(firestoreMod.addDoc);
 const mockedDeleteDoc = vi.mocked(firestoreMod.deleteDoc);
@@ -42,6 +43,7 @@ const mockedSetDoc = vi.mocked(firestoreMod.setDoc);
 const mockedUpdateDoc = vi.mocked(firestoreMod.updateDoc);
 const mockedTimestamp = vi.mocked(firestoreMod.Timestamp);
 const mockedServerTimestamp = vi.mocked(firestoreMod.serverTimestamp);
+const mockedGetDocs = vi.mocked(firestoreMod.getDocs);
 
 describe('eventsApi', () => {
   beforeEach(() => {
@@ -138,6 +140,19 @@ describe('eventsApi', () => {
       const [docRef, patch] = mockedUpdateDoc.mock.calls[0] as unknown as [Record<string, unknown>, Record<string, unknown>];
       expect(docRef._path).toBe('events/event-xyz');
       expect(patch).toMatchObject({ title: 'Updated Title' });
+    });
+  });
+
+  describe('fetchRsvps', () => {
+    it('maps a one-shot getDocs snapshot to Rsvp objects', async () => {
+      mockedGetDocs.mockResolvedValueOnce({
+        docs: [{ data: () => ({ id: 'u1', status: 'yes', displayName: 'A' }) }],
+      } as any);
+
+      const rsvps = await fetchRsvps('e1');
+
+      expect(rsvps).toEqual([{ id: 'u1', status: 'yes', displayName: 'A' }]);
+      expect(mockedGetDocs).toHaveBeenCalledTimes(1);
     });
   });
 });

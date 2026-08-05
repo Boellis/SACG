@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 // Stub firestore + firebase + collections so importing the module never touches a backend.
 vi.mock('firebase/firestore', () => ({
   onSnapshot: vi.fn(),
+  getDocs: vi.fn(),
   addDoc: vi.fn(),
   deleteDoc: vi.fn(),
   setDoc: vi.fn(),
@@ -19,7 +20,8 @@ vi.mock('../../data/collections', () => ({
   votesDoc: () => ({}),
 }));
 
-import { tally, isPollOpen } from './pollsApi';
+import { getDocs } from 'firebase/firestore';
+import { tally, isPollOpen, fetchVotes } from './pollsApi';
 import type { Poll, PollOption, PollVote } from '../../lib/types';
 
 const options: PollOption[] = [
@@ -84,5 +86,18 @@ describe('isPollOpen', () => {
   it('is closed once the close date has passed', () => {
     expect(isPollOpen({ closed: false, expiresAt: ts(now - 1) } as Poll, now)).toBe(false);
     expect(isPollOpen({ closed: false, expiresAt: ts(now) } as Poll, now)).toBe(false); // not strictly future
+  });
+});
+
+describe('fetchVotes', () => {
+  it('maps a one-shot getDocs snapshot to PollVote objects', async () => {
+    vi.mocked(getDocs).mockResolvedValueOnce({
+      docs: [{ id: 'u1', data: () => ({ optionId: '0', memberId: 'u1' }) }],
+    } as any);
+
+    const votes = await fetchVotes('p1');
+
+    expect(votes).toEqual([{ id: 'u1', optionId: '0', memberId: 'u1' }]);
+    expect(getDocs).toHaveBeenCalledTimes(1);
   });
 });
