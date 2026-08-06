@@ -2,6 +2,7 @@ import { render, screen, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('firebase/firestore', () => ({}));
+vi.mock('../../../auth/useAuth', () => ({ useAuth: vi.fn() }));
 
 // Mock every listener/fetch API the shell's useAnalyticsData hook consumes so no
 // Firestore calls happen (same idiom as OverviewTab.test.tsx / OperationsTab.test.tsx).
@@ -30,6 +31,9 @@ vi.mock('../../settings/settingsApi', () => ({
 }));
 
 import AnalyticsPage from '../AnalyticsPage';
+import * as useAuthMod from '../../../auth/useAuth';
+
+const mockedUseAuth = vi.mocked(useAuthMod.useAuth);
 
 import * as plotsApiMod from '../../plots/plotsApi';
 import * as membersApiMod from '../../members/membersApi';
@@ -96,6 +100,13 @@ describe('EngagementTab', () => {
   beforeEach(() => {
     localStorage.clear();
     vi.clearAllMocks();
+    mockedUseAuth.mockReturnValue({
+      user: { uid: 'admin-uid' },
+      role: 'admin',
+      status: 'active',
+      loading: false,
+      member: makeMember({ id: 'admin-uid', role: 'admin' }),
+    } as any);
     mockedListenMembers.mockImplementation((cb) => {
       cb([
         makeMember({ id: 'm1', displayName: 'Ada', status: 'active' }) as any,

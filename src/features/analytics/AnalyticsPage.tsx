@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { NavLink, Outlet, Route, Routes, useOutletContext } from 'react-router-dom';
 import './analytics.css';
+import { useAuth } from '../../auth/useAuth';
 import { useAnalyticsData } from './useAnalyticsData';
 import {
   resolveWindow, bucketFor,
@@ -35,8 +36,19 @@ const TABS = [
 
 function Shell() {
   const now = useMemo(() => new Date(), []);
+  const { user, member } = useAuth();
   const [range, setRange] = useState<RangeKey>('season');
-  const [demo, setDemo] = useState(() => localStorage.getItem('alx-demo') === '1');
+  // The demo choice is stored per account so a shared browser can't leak one
+  // account's preference into another's.
+  const demoKey = `alx-demo:${user?.uid ?? 'anon'}`;
+  const [demo, setDemo] = useState(() => localStorage.getItem(demoKey) === '1');
+  // Accounts flagged demoDefault (the template demo admin) start with demo
+  // data on until they explicitly choose otherwise.
+  useEffect(() => {
+    if (member?.demoDefault && localStorage.getItem(demoKey) === null) {
+      setDemo(true);
+    }
+  }, [member, demoKey]);
   const { data, error } = useAnalyticsData(demo, now);
 
   const seasonYear = Number(data?.settings.currentSeason) || now.getUTCFullYear();
@@ -44,7 +56,7 @@ function Shell() {
 
   const toggleDemo = () => {
     const next = !demo;
-    localStorage.setItem('alx-demo', next ? '1' : '0');
+    localStorage.setItem(demoKey, next ? '1' : '0');
     setDemo(next);
   };
   return (

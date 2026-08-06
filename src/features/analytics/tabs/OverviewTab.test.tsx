@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('firebase/firestore', () => ({}));
+vi.mock('../../../auth/useAuth', () => ({ useAuth: vi.fn() }));
 
 // Mock every listener/fetch API the shell's useAnalyticsData hook consumes so no
 // Firestore calls happen (same idiom as AnalyticsPage.test.tsx / useAnalyticsData.test.tsx).
@@ -30,6 +31,9 @@ vi.mock('../../settings/settingsApi', () => ({
 }));
 
 import AnalyticsPage from '../AnalyticsPage';
+import * as useAuthMod from '../../../auth/useAuth';
+
+const mockedUseAuth = vi.mocked(useAuthMod.useAuth);
 
 import * as plotsApiMod from '../../plots/plotsApi';
 import * as membersApiMod from '../../members/membersApi';
@@ -110,6 +114,13 @@ describe('OverviewTab', () => {
     // + reset mocks to fixtures: 2 members (1 active, 1 pending), 2 plots, 1 hours
     // entry, empty events/threads/polls, settings null, fetchRsvps/fetchVotes -> [].
     vi.clearAllMocks();
+    mockedUseAuth.mockReturnValue({
+      user: { uid: 'admin-uid' },
+      role: 'admin',
+      status: 'active',
+      loading: false,
+      member: makeMember({ id: 'admin-uid', role: 'admin' }),
+    } as any);
     mockedListenMembers.mockImplementation((cb) => {
       cb([
         makeMember({ id: 'm1', status: 'active' }) as any,
