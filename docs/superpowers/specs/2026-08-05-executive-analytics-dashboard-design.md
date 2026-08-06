@@ -27,7 +27,7 @@ Language stays right-sized for a community garden: "committee report," not
 | Structure | **One page** with tabs: Overview, Finance, Operations, Engagement |
 | Tab URLs | Active tab reflected in URL (`/analytics`, `/analytics/finance`, …) — back button/bookmarks work; zero navigation feel |
 | Capabilities | Date-range filter, print/PDF committee report, period-over-period deltas, drill-down interactions — all in scope |
-| Theme | Polished light default + dark toggle, scoped to the analytics area |
+| Theme | Polished light default + dark toggle, scoped to the analytics area. *(Amended post-launch 2026-08-05: dark mode removed at Brandon's request — the light theme matches the app; light is the only theme.)* |
 | Charts | Recharts (2.x line, React-18-compatible), lazy-loaded so it stays out of the main bundle |
 
 ## Architecture
