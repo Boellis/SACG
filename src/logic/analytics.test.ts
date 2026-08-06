@@ -6,21 +6,21 @@ import {
 import {
   occupancyKpi, duesKpi, memberGrowthSeries, hoursTotal, hoursSeries,
   participationKpi, participationSeries, waitlistCount, collectedSeries, topVolunteers,
-  hoursCohorts, expectedHoursPace, DEFAULT_ORG_SETTINGS, resolveWindow as rw,
+  hoursCohorts, expectedHoursPace, DEFAULT_ORG_SETTINGS, resolveWindow as rw, joinedBefore,
 } from './analytics';
 
 const NOW = new Date(Date.UTC(2026, 7, 5, 12)); // Aug 5 2026 12:00Z
 const ts = (d: Date) => ({ toDate: () => d, toMillis: () => d.getTime() });
 
 describe('resolveWindow', () => {
-  it('season = Jan 1 of seasonYear to now, prev = prior calendar year', () => {
+  it('season = Jan 1 of seasonYear to now, prev = same date range one year earlier (season-to-date)', () => {
     const w = resolveWindow('season', NOW, 2026);
     expect(w.start).toEqual(new Date(Date.UTC(2026, 0, 1)));
     expect(w.end).toEqual(NOW);
     expect(w.prevStart).toEqual(new Date(Date.UTC(2025, 0, 1)));
-    expect(w.prevEnd).toEqual(new Date(Date.UTC(2026, 0, 1)));
+    expect(w.prevEnd).toEqual(new Date(Date.UTC(2025, 7, 5)));
     expect(w.label).toBe('2026 season');
-    expect(w.prevLabel).toBe('2025 season');
+    expect(w.prevLabel).toBe('2025 season to date');
   });
   it('last90 = now-90d, prev = the 90d before that', () => {
     const w = resolveWindow('last90', NOW, 2026);
@@ -362,5 +362,32 @@ describe('buildKpis', () => {
     expect(kpis[0].spark).toBeNull();
     expect(kpis[5].spark).toBeNull();
     expect(kpis[4].spark!.length).toBeGreaterThan(0);
+  });
+
+  it('members tile shows no delta on all time and counts January joiners in-window', () => {
+    const NOW = new Date(Date.UTC(2026, 7, 5));
+    const ms = [
+      member({ id: 'jan', joinedAt: T(2026, 0, 5) }),   // joined Jan 5 — inside the season window
+      member({ id: 'old', joinedAt: T(2024, 5, 1) }),   // joined 2024 — baseline
+    ] as any;
+    const base = {
+      members: ms, plots: [], hours: [], events: [], threads: [], polls: [],
+      rsvpsByEvent: {}, votesByPoll: {}, duesHistory: [], settings: DEFAULT_ORG_SETTINGS,
+    } as any;
+    const season = buildKpis(base, rw('season', NOW, 2026), NOW);
+    const seasonMembers = season.find((k) => k.key === 'members')!;
+    expect(seasonMembers.detail).toBe('+1 in 2026 season');       // jan counted, old is baseline
+    expect(seasonMembers.delta!.pct).toBe(100);                    // 2 now vs 1 at 2025-08-05
+    const all = buildKpis(base, rw('all', NOW, 2026), NOW);
+    expect(all.find((k) => k.key === 'members')!.delta).toBeNull();
+  });
+
+  it('joinedBefore counts non-pending joins strictly before the cutoff', () => {
+    const ms = [
+      member({ id: 'a', joinedAt: T(2025, 0, 1) }),
+      member({ id: 'b', joinedAt: T(2026, 0, 1) }),
+      member({ id: 'p', status: 'pending', createdAt: T(2024, 0, 1) }),
+    ] as any;
+    expect(joinedBefore(ms, new Date(Date.UTC(2026, 0, 1)))).toBe(1);  // b is AT cutoff → excluded
   });
 });

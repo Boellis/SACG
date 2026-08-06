@@ -73,3 +73,24 @@
   .alx-print-header { display: block; margin-bottom: 1rem; }
   .alx-card { box-shadow: none; }
 }
+
+/* The shared UI-kit Table/Th/Td hardcode app-light colors; retheme them inside
+   analytics cards only. DrilldownPanel's modal stays white in both modes and
+   keeps the kit's own styling. */
+.alx-card th {
+  background: var(--alx-page) !important;
+  color: var(--alx-text-2) !important;
+}
+.alx-card td {
+  color: var(--alx-text) !important;
+  border-color: var(--alx-border) !important;
+}
+.alx-card table,
+.alx-card thead,
+.alx-card tbody,
+.alx-card .overflow-x-auto {
+  border-color: var(--alx-border) !important;
+}
+.alx-card a {
+  color: var(--alx-accent) !important;
+}

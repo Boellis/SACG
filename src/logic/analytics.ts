@@ -22,8 +22,8 @@ export function resolveWindow(key: RangeKey, now: Date, seasonYear: number): Ana
     return {
       key, start, end: now,
       prevStart: new Date(Date.UTC(seasonYear - 1, 0, 1)),
-      prevEnd: start,
-      label: `${seasonYear} season`, prevLabel: `${seasonYear - 1} season`,
+      prevEnd: new Date(Date.UTC(seasonYear - 1, now.getUTCMonth(), now.getUTCDate())),
+      label: `${seasonYear} season`, prevLabel: `${seasonYear - 1} season to date`,
     };
   }
   if (key === 'last90' || key === 'last12mo') {
@@ -140,6 +140,14 @@ export function activeMembers(members: Member[]): Member[] {
 export function joinDate(m: Member): Date | null {
   const ts = (m.joinedAt ?? m.createdAt) as unknown as TsLike | undefined;
   return ts ? ts.toDate() : null;
+}
+
+export function joinedBefore(members: Member[], cutoff: Date): number {
+  return members
+    .filter((m) => m.status !== 'pending')
+    .map(joinDate)
+    .filter((d): d is Date => d !== null && d.getTime() < cutoff.getTime())
+    .length;
 }
 
 export function memberGrowthSeries(members: Member[], w: AnalyticsWindow, bucket: Bucket): SeriesPoint[] {
@@ -441,8 +449,9 @@ export function buildKpis(d: AnalyticsDataset, w: AnalyticsWindow, _now: Date): 
   const prevHours = prevW ? hoursTotal(d.hours, prevW) : null;
   const prevPart = prevW ? participationKpi(d.members, d.hours, prevW) : null;
   const growth = memberGrowthSeries(d.members, w, bucket);
-  const growthStart = growth[0]?.value ?? 0;
   const growthEnd = growth[growth.length - 1]?.value ?? 0;
+  const memberBaseline = w.start ? joinedBefore(d.members, w.start) : null;
+  const memberPrevTotal = w.prevEnd ? joinedBefore(d.members, w.prevEnd) : null;
   return [
     {
       key: 'occupancy', label: 'Plot occupancy', display: fmtPct(occ.pct),
@@ -456,8 +465,11 @@ export function buildKpis(d: AnalyticsDataset, w: AnalyticsWindow, _now: Date): 
     },
     {
       key: 'members', label: 'Active members', display: fmtCompact(act.length),
-      detail: w.prevStart ? `${growthEnd - growthStart >= 0 ? '+' : ''}${growthEnd - growthStart} in ${w.label}` : 'all time',
-      delta: computeDelta(growthEnd, growthStart || null), goodWhenUp: true,
+      detail: memberBaseline !== null
+        ? `${growthEnd - memberBaseline >= 0 ? '+' : ''}${growthEnd - memberBaseline} in ${w.label}`
+        : 'all time',
+      delta: memberPrevTotal !== null ? computeDelta(growthEnd, memberPrevTotal || null) : null,
+      goodWhenUp: true,
       spark: growth.map((p) => p.value),
     },
     {

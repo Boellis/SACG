@@ -2,6 +2,7 @@ import { useState } from 'react';
 import {
   ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
 } from 'recharts';
+import { Link } from 'react-router-dom';
 import { useAlx } from '../AnalyticsPage';
 import {
   duesByTier, duesIncreaseTable, collectedSeries, fmtCurrency,
@@ -71,7 +72,8 @@ export default function FinanceTab() {
           }}
         >
           <div className="flex flex-col gap-3">
-            <div className="flex justify-end">
+            <div className="flex justify-end items-center gap-3">
+              <Link to="/dues" className="underline text-garden-700 text-xs">Open dues page →</Link>
               <button
                 type="button"
                 onClick={openAllUnpaid}

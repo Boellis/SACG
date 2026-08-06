@@ -134,4 +134,9 @@ describe('FinanceTab', () => {
     expect(screen.getByText(/unpaid dues/i)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /1/ })).toHaveAttribute('href', '/plots/1');
   });
+
+  it('links to the dues admin page', () => {
+    renderAt('/analytics/finance');
+    expect(screen.getByRole('link', { name: /open dues page/i })).toHaveAttribute('href', '/dues');
+  });
 });
