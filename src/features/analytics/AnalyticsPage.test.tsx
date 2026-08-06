@@ -157,10 +157,4 @@ describe('AnalyticsPage', () => {
     expect(screen.getByText('DEMO DATA')).toBeInTheDocument();
     expect(localStorage.getItem('alx-demo')).toBe('1');
   });
-  it('theme toggle flips data-mode and persists', () => {
-    const { container } = renderAt('/analytics');
-    fireEvent.click(screen.getByRole('button', { name: /dark/i }));
-    expect(container.querySelector('.alx-root')!.getAttribute('data-mode')).toBe('dark');
-    expect(localStorage.getItem('alx-mode')).toBe('dark');
-  });
 });

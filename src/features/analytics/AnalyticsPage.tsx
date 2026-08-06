@@ -6,7 +6,7 @@ import {
   resolveWindow, bucketFor,
   type RangeKey, type AnalyticsWindow, type AnalyticsDataset, type Bucket,
 } from '../../logic/analytics';
-import { VIZ, type VizMode, type VizTokens } from './tokens';
+import { VIZ, type VizTokens } from './tokens';
 import OverviewTab from './tabs/OverviewTab';
 import FinanceTab from './tabs/FinanceTab';
 import OperationsTab from './tabs/OperationsTab';
@@ -14,7 +14,7 @@ import EngagementTab from './tabs/EngagementTab';
 
 export interface AlxContext {
   data: AnalyticsDataset; w: AnalyticsWindow; bucket: Bucket;
-  tokens: VizTokens; mode: VizMode; now: Date; demo: boolean;
+  tokens: VizTokens; now: Date; demo: boolean;
 }
 export function useAlx(): AlxContext {
   return useOutletContext<AlxContext>();
@@ -37,7 +37,6 @@ function Shell() {
   const now = useMemo(() => new Date(), []);
   const [range, setRange] = useState<RangeKey>('season');
   const [demo, setDemo] = useState(() => localStorage.getItem('alx-demo') === '1');
-  const [mode, setMode] = useState<VizMode>(() => (localStorage.getItem('alx-mode') === 'dark' ? 'dark' : 'light'));
   const { data, error } = useAnalyticsData(demo, now);
 
   const seasonYear = Number(data?.settings.currentSeason) || now.getUTCFullYear();
@@ -48,14 +47,8 @@ function Shell() {
     localStorage.setItem('alx-demo', next ? '1' : '0');
     setDemo(next);
   };
-  const toggleMode = () => {
-    const next: VizMode = mode === 'light' ? 'dark' : 'light';
-    localStorage.setItem('alx-mode', next);
-    setMode(next);
-  };
-
   return (
-    <div className="alx-root" data-mode={mode}>
+    <div className="alx-root">
       <div className="alx-print-header">
         <h1 className="text-xl font-bold">South Austin Community Garden — Committee Report</h1>
         <p className="text-sm" style={{ color: 'var(--alx-text-2)' }}>
@@ -80,9 +73,6 @@ function Shell() {
             <input type="checkbox" checked={demo} onChange={toggleDemo} aria-label="Demo data" />
             Demo data
           </label>
-          <button type="button" onClick={toggleMode} className="alx-tab" aria-label={mode === 'light' ? 'Dark' : 'Light'}>
-            {mode === 'light' ? '🌙 Dark' : '☀️ Light'}
-          </button>
           <button type="button" onClick={() => window.print()} className="alx-tab" style={{ border: '1px solid var(--alx-border)' }}>
             🖨 Print committee report
           </button>
@@ -104,7 +94,7 @@ function Shell() {
           ))}
         </div>
       ) : (
-        <Outlet context={{ data, w, bucket: bucketFor(range), tokens: VIZ[mode], mode, now, demo } satisfies AlxContext} />
+        <Outlet context={{ data, w, bucket: bucketFor(range), tokens: VIZ, now, demo } satisfies AlxContext} />
       )}
     </div>
   );

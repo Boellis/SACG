@@ -29,7 +29,7 @@ function cohortNames(members: Member[]): string {
 }
 
 export default function EngagementTab() {
-  const { data, w, bucket, tokens, mode, now } = useAlx();
+  const { data, w, bucket, tokens, now } = useAlx();
   const bucketHeader = bucket === 'week' ? 'Week' : 'Month';
 
   const cohorts = hoursCohorts(data.members, data.hours, data.settings, now);
@@ -172,7 +172,7 @@ export default function EngagementTab() {
                 <Tooltip cursor={{ fill: 'transparent' }} />
                 <Bar dataKey="yes" stackId="rsvp" fill={tokens.series1} stroke={tokens.surface} strokeWidth={2} barSize={14} />
                 <Bar dataKey="maybe" stackId="rsvp" fill={tokens.neutralFill} stroke={tokens.surface} strokeWidth={2} barSize={14} />
-                <Bar dataKey="no" stackId="rsvp" fill={RED_POLE[mode]} stroke={tokens.surface} strokeWidth={2} barSize={14} />
+                <Bar dataKey="no" stackId="rsvp" fill={RED_POLE} stroke={tokens.surface} strokeWidth={2} barSize={14} />
               </BarChart>
             </ResponsiveContainer>
             <div className="flex flex-wrap gap-4">
@@ -185,7 +185,7 @@ export default function EngagementTab() {
                 <span className="text-xs" style={{ color: 'var(--alx-text-2)' }}>Maybe</span>
               </div>
               <div className="flex items-center gap-1.5">
-                <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: RED_POLE[mode] }} aria-hidden="true" />
+                <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: RED_POLE }} aria-hidden="true" />
                 <span className="text-xs" style={{ color: 'var(--alx-text-2)' }}>No</span>
               </div>
             </div>

@@ -17,17 +17,6 @@
   padding: 1.5rem;
   min-height: calc(100vh - 3.5rem);
 }
-.alx-root[data-mode='dark'] {
-  --alx-surface: #1a1a19;
-  --alx-page: #0d0d0d;
-  --alx-text: #ffffff;
-  --alx-text-2: #c3c2b7;
-  --alx-muted: #898781;
-  --alx-grid: #2c2c2a;
-  --alx-border: rgba(255, 255, 255, 0.1);
-  --alx-accent: #3987e5;
-  --alx-delta-good: #0ca30c;
-}
 .alx-card {
   background: var(--alx-surface);
   border: 1px solid var(--alx-border);
@@ -58,39 +47,15 @@
 .alx-print-header { display: none; }
 
 @media print {
-  /* Print exactly the analytics area, forced light, no app chrome. */
+  /* Print exactly the analytics area, no app chrome. */
   body * { visibility: hidden; }
   .alx-root, .alx-root * { visibility: visible; }
   .alx-root {
     position: absolute; inset: 0 auto auto 0; width: 100%;
     margin: 0; padding: 1rem;
-    --alx-surface: #fcfcfb; --alx-page: #ffffff; --alx-text: #0b0b0b;
-    --alx-text-2: #52514e; --alx-muted: #898781; --alx-grid: #e1e0d9;
-    --alx-border: rgba(11, 11, 11, 0.1); --alx-accent: #2a78d6;
-    --alx-delta-good: #006300;
+    --alx-page: #ffffff;
   }
   .alx-controls, .alx-tabs { display: none !important; }
   .alx-print-header { display: block; margin-bottom: 1rem; }
   .alx-card { box-shadow: none; }
-}
-
-/* The shared UI-kit Table/Th/Td hardcode app-light colors; retheme them inside
-   analytics cards only. DrilldownPanel's modal stays white in both modes and
-   keeps the kit's own styling. */
-.alx-card th {
-  background: var(--alx-page) !important;
-  color: var(--alx-text-2) !important;
-}
-.alx-card td {
-  color: var(--alx-text) !important;
-  border-color: var(--alx-border) !important;
-}
-.alx-card table,
-.alx-card thead,
-.alx-card tbody,
-.alx-card .overflow-x-auto {
-  border-color: var(--alx-border) !important;
-}
-.alx-card a {
-  color: var(--alx-accent) !important;
 }

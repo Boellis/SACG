@@ -25,7 +25,7 @@ describe('KpiTile', () => {
     render(
       <KpiTile
         prevLabel="2025 season"
-        tokens={VIZ.light}
+        tokens={VIZ}
         kpi={{ key: 'hours', label: 'Volunteer hours', display: '128', detail: '2026 season',
                delta: { pct: 5, dir: 'up' }, goodWhenUp: true, spark: [1, 2, 3] }}
       />,
