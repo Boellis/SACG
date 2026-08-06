@@ -104,8 +104,13 @@ src/logic/analytics.test.ts
   Every widget respects it. "This season" = calendar year of
   `settings.currentSeason` (default 2026).
 - **Deltas:** each KPI compares its window against the immediately-preceding
-  window of equal length ("This season" → prior season). "All time" shows no
-  delta. Empty prior window renders "—", never a fake 0%.
+  window of equal length. *(Amended at final review:)* "This season" compares
+  against the prior season **to date** (same calendar date one year earlier),
+  labeled "<year> season to date" — comparing a partial season against a full
+  prior year deflated mid-season deltas. "All time" shows no delta. Empty
+  prior window renders "—", never a fake 0%. The members tile's delta
+  compares total membership now vs. at the prior window's endpoint; its
+  detail line counts in-window joins from the true window start.
 - **Demo data toggle:** prominent "DEMO DATA" badge whenever on (including in
   print output — honesty over polish). Persisted in `localStorage`.
 - **Theme toggle:** light default; dark applies a CSS-variable theme on the
@@ -182,6 +187,9 @@ src/logic/analytics.test.ts
 - Every chart has a designed empty state ("No hours logged in this window") so
   thin real data looks intentional, not broken.
 - Listener error → inline retry card scoped to the affected widget group.
+  *(As built:)* one-shot fetch failures surface as a single inline error line
+  (no per-widget retry card) — accepted deviation for an admin-only tool;
+  listener-level failures fall back to the loading skeleton.
 
 ## Testing
 
