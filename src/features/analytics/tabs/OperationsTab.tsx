@@ -81,7 +81,10 @@ export default function OperationsTab() {
 
         <ChartCard
           title="Needs attention"
-          empty={{ when: upkeep.attention.length === 0, message: 'Every assigned plot shows recent activity 🎉' }}
+          empty={{
+            when: upkeep.attention.length === 0 && upkeep.nodata.length === 0,
+            message: 'Every assigned plot shows recent activity 🎉',
+          }}
         >
           <div className="flex flex-col gap-2">
             <ul className="flex flex-col gap-1.5">
@@ -92,6 +95,11 @@ export default function OperationsTab() {
                 </li>
               ))}
             </ul>
+            {upkeep.attention.length === 0 && (
+              <p className="text-xs" style={{ color: 'var(--alx-muted)' }}>
+                No plots currently need attention.
+              </p>
+            )}
             {upkeep.nodata.length > 0 && (
               <p className="text-xs" style={{ color: 'var(--alx-muted)' }}>
                 {upkeep.nodata.length} plots have no upkeep data yet

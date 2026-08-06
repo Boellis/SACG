@@ -163,4 +163,19 @@ describe('OperationsTab', () => {
     renderAt('/analytics/operations');
     expect(screen.getByText(/1 (person|people) waiting for 1 open plot/i)).toBeInTheDocument();
   });
+
+  it('shows the no-upkeep-data notice instead of celebrating when data is missing', () => {
+    // plot 1: assigned, no crops, no lastWateredAt (makePlot's base injects neither) -> nodata
+    // plot 2: assigned, fresh-planted kale -> thriving; attention list is empty either way
+    mockedListenPlots.mockImplementation((cb) => {
+      cb([
+        makePlot({ id: '1', status: 'assigned', crops: [], holderName: 'Ada' }) as any,
+        makePlot({ id: '2', status: 'assigned', crops: [{ name: 'kale', plantedOn: daysAgo(10) }] }) as any,
+      ]);
+      return vi.fn();
+    });
+    renderAt('/analytics/operations');
+    expect(screen.getByText(/1 plots? have no upkeep data yet/i)).toBeInTheDocument();
+    expect(screen.queryByText(/recent activity/i)).not.toBeInTheDocument();
+  });
 });
