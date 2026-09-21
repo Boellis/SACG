@@ -23,7 +23,7 @@ Language stays right-sized for a community garden: "committee report," not
 | Question | Decision |
 |---|---|
 | Access | Admin-only, behind existing `RequireAdmin`; demoed via screen-share |
-| Data | Live Firestore + a **Demo data** toggle (rich generated dataset for presentations) |
+| Data | Live Firestore + a **Demo data** toggle (rich generated dataset for presentations) *(Amended post-launch 2026-09-20: the demo toggle, seeded dataset, and `demoDefault` account preset were removed at Brandon's request — /analytics always shows live data.)* |
 | Structure | **One page** with tabs: Overview, Finance, Operations, Engagement |
 | Tab URLs | Active tab reflected in URL (`/analytics`, `/analytics/finance`, …) — back button/bookmarks work; zero navigation feel |
 | Capabilities | Date-range filter, print/PDF committee report, period-over-period deltas, drill-down interactions — all in scope |

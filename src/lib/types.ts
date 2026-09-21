@@ -19,9 +19,6 @@ export interface Member {
   createdAt: Timestamp;
   currentYearHours: number;
   notes?: string;
-  // Accounts flagged true (the template demo admin) open /analytics with the
-  // demo-data toggle preset on until they explicitly choose otherwise.
-  demoDefault?: boolean;
 }
 
 export interface Crop { name: string; plantedOn?: Timestamp; notes?: string; }

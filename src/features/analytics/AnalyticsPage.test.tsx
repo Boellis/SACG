@@ -2,7 +2,6 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('firebase/firestore', () => ({}));
-vi.mock('../../auth/useAuth', () => ({ useAuth: vi.fn() }));
 
 // Mock every listener/fetch API the shell's useAnalyticsData hook consumes so no
 // Firestore calls happen (same idiom as useAnalyticsData.test.tsx).
@@ -31,10 +30,6 @@ vi.mock('../settings/settingsApi', () => ({
 }));
 
 import AnalyticsPage from './AnalyticsPage';
-import * as useAuthMod from '../../auth/useAuth';
-
-const mockedUseAuth = vi.mocked(useAuthMod.useAuth);
-
 import * as plotsApiMod from '../plots/plotsApi';
 import * as membersApiMod from '../members/membersApi';
 import * as hoursApiMod from '../hours/hoursApi';
@@ -110,17 +105,9 @@ function renderAt(path: string) {
 
 describe('AnalyticsPage', () => {
   beforeEach(() => {
-    localStorage.clear();
-    // + reset mocks to fixtures: 2 members (1 active, 1 pending), 2 plots, 1 hours
+    // Reset mocks to fixtures: 2 members (1 active, 1 pending), 2 plots, 1 hours
     // entry, empty events/threads/polls, settings null, fetchRsvps/fetchVotes -> [].
     vi.clearAllMocks();
-    mockedUseAuth.mockReturnValue({
-      user: { uid: 'admin-uid' },
-      role: 'admin',
-      status: 'active',
-      loading: false,
-      member: makeMember({ id: 'admin-uid', role: 'admin' }),
-    } as any);
     mockedListenMembers.mockImplementation((cb) => {
       cb([
         makeMember({ id: 'm1', status: 'active' }) as any,
@@ -151,7 +138,6 @@ describe('AnalyticsPage', () => {
     renderAt('/analytics');
     expect(screen.getByTestId('tab-overview')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /print committee report/i })).toBeInTheDocument();
-    expect(screen.getByLabelText(/demo data/i)).toBeInTheDocument();
   });
   it('routes tabs by URL', () => {
     renderAt('/analytics/finance');
@@ -161,34 +147,5 @@ describe('AnalyticsPage', () => {
     renderAt('/analytics');
     fireEvent.click(screen.getByRole('button', { name: /last 90 days/i }));
     expect(screen.getByTestId('tab-overview')).toHaveTextContent('Last 90 days');
-  });
-  it('demo toggle shows the DEMO DATA badge and persists per account', () => {
-    renderAt('/analytics');
-    fireEvent.click(screen.getByLabelText(/demo data/i));
-    expect(screen.getByText('DEMO DATA')).toBeInTheDocument();
-    expect(localStorage.getItem('alx-demo:admin-uid')).toBe('1');
-  });
-  it('presets demo data on for accounts flagged demoDefault', () => {
-    mockedUseAuth.mockReturnValue({
-      user: { uid: 'demo-uid' },
-      role: 'admin',
-      status: 'active',
-      loading: false,
-      member: makeMember({ id: 'demo-uid', role: 'admin', demoDefault: true }),
-    } as any);
-    renderAt('/analytics');
-    expect(screen.getByText('DEMO DATA')).toBeInTheDocument();
-  });
-  it('an explicit off choice beats the account preset', () => {
-    localStorage.setItem('alx-demo:demo-uid', '0');
-    mockedUseAuth.mockReturnValue({
-      user: { uid: 'demo-uid' },
-      role: 'admin',
-      status: 'active',
-      loading: false,
-      member: makeMember({ id: 'demo-uid', role: 'admin', demoDefault: true }),
-    } as any);
-    renderAt('/analytics');
-    expect(screen.queryByText('DEMO DATA')).not.toBeInTheDocument();
   });
 });

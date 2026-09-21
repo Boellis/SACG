@@ -48,18 +48,16 @@ const mockedListenPolls = vi.mocked(pollsApiMod.listenPolls);
 const mockedFetchVotes = vi.mocked(pollsApiMod.fetchVotes);
 const mockedListenSettings = vi.mocked(settingsApiMod.listenSettings);
 
-const NOW = new Date(Date.UTC(2026, 7, 5, 12));
-
 // Probe renders the member count so we can distinguish "loading" (data===null)
 // from an assembled dataset without reaching into hook internals.
-function Probe({ demo }: { demo: boolean }) {
-  const { data } = useAnalyticsData(demo, NOW);
+function Probe() {
+  const { data } = useAnalyticsData();
   return <div>{data === null ? 'loading' : String(data.members.length)}</div>;
 }
 
 // ProbeSettings renders just the settings.requiredHours field.
-function ProbeSettings({ demo }: { demo: boolean }) {
-  const { data } = useAnalyticsData(demo, NOW);
+function ProbeSettings() {
+  const { data } = useAnalyticsData();
   return <div>{data?.settings.requiredHours}</div>;
 }
 
@@ -176,20 +174,7 @@ describe('useAnalyticsData', () => {
     mockedFetchVotes.mockResolvedValue([]);
   });
 
-  it('demo mode returns the demo dataset without touching listeners', () => {
-    render(<Probe demo />);
-    expect(screen.getByText('70')).toBeInTheDocument(); // demo member count
-
-    expect(mockedListenMembers).not.toHaveBeenCalled();
-    expect(mockedListenPlots).not.toHaveBeenCalled();
-    expect(mockedListenAllHours).not.toHaveBeenCalled();
-    expect(mockedListenEvents).not.toHaveBeenCalled();
-    expect(mockedListenThreads).not.toHaveBeenCalled();
-    expect(mockedListenPolls).not.toHaveBeenCalled();
-    expect(mockedListenSettings).not.toHaveBeenCalled();
-  });
-
-  it('live mode assembles the dataset from listeners', async () => {
+  it('assembles the dataset from listeners', async () => {
     mockedListenMembers.mockImplementation((cb) => {
       cb([makeMember({ id: 'm1' }) as any, makeMember({ id: 'm2' }) as any]);
       return vi.fn();
@@ -219,7 +204,7 @@ describe('useAnalyticsData', () => {
       return vi.fn();
     });
 
-    render(<Probe demo={false} />);
+    render(<Probe />);
     expect(await screen.findByText('2')).toBeInTheDocument(); // fixture member count
 
     // one-shot fetches fired for the single event/poll that arrived
@@ -227,9 +212,9 @@ describe('useAnalyticsData', () => {
     expect(mockedFetchVotes).toHaveBeenCalledWith('poll1');
   });
 
-  it('live mode falls back to DEFAULT_ORG_SETTINGS when settings doc is absent', async () => {
+  it('falls back to DEFAULT_ORG_SETTINGS when settings doc is absent', async () => {
     // beforeEach already wires members/plots/hours to cb([]) and settings to cb(null)
-    render(<ProbeSettings demo={false} />);
+    render(<ProbeSettings />);
     expect(await screen.findByText('12')).toBeInTheDocument();
   });
 
@@ -243,7 +228,7 @@ describe('useAnalyticsData', () => {
     mockedListenPolls.mockImplementation((cb) => { cb([]); return unsub; });
     mockedListenSettings.mockImplementation((cb) => { cb(null); return unsub; });
 
-    const { unmount } = render(<Probe demo={false} />);
+    const { unmount } = render(<Probe />);
     unmount();
     expect(unsub).toHaveBeenCalledTimes(7);
   });

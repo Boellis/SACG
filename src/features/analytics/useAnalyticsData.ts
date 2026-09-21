@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { listenPlots } from '../plots/plotsApi';
 import { listenMembers } from '../members/membersApi';
 import { listenAllHours } from '../hours/hoursApi';
@@ -9,10 +9,9 @@ import { listenSettings } from '../settings/settingsApi';
 import {
   DEFAULT_ORG_SETTINGS, currentSeasonDuesHistory, type AnalyticsDataset,
 } from '../../logic/analytics';
-import { buildDemoDataset } from './demoData';
 import type { Member, Plot, VolunteerHour, GardenEvent, ForumThread, Poll, OrgSettings, Rsvp, PollVote } from '../../lib/types';
 
-export function useAnalyticsData(demo: boolean, now: Date): { data: AnalyticsDataset | null; error: string | null } {
+export function useAnalyticsData(): { data: AnalyticsDataset | null; error: string | null } {
   const [members, setMembers] = useState<Member[] | null>(null);
   const [plots, setPlots] = useState<Plot[] | null>(null);
   const [hours, setHours] = useState<VolunteerHour[] | null>(null);
@@ -25,7 +24,6 @@ export function useAnalyticsData(demo: boolean, now: Date): { data: AnalyticsDat
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (demo) return;
     const unsubs = [
       listenMembers(setMembers),
       listenPlots(setPlots),
@@ -36,29 +34,26 @@ export function useAnalyticsData(demo: boolean, now: Date): { data: AnalyticsDat
       listenSettings(setSettings),
     ];
     return () => unsubs.forEach((u) => u());
-  }, [demo]);
+  }, []);
 
   useEffect(() => {
-    if (demo || events.length === 0) return;
+    if (events.length === 0) return;
     let cancelled = false;
     Promise.all(events.map(async (e) => [e.id, await fetchRsvps(e.id)] as const))
       .then((pairs) => { if (!cancelled) setRsvpsByEvent(Object.fromEntries(pairs)); })
       .catch(() => { if (!cancelled) setError('Some RSVP counts failed to load'); });
     return () => { cancelled = true; };
-  }, [demo, events]);
+  }, [events]);
 
   useEffect(() => {
-    if (demo || polls.length === 0) return;
+    if (polls.length === 0) return;
     let cancelled = false;
     Promise.all(polls.map(async (p) => [p.id, await fetchVotes(p.id)] as const))
       .then((pairs) => { if (!cancelled) setVotesByPoll(Object.fromEntries(pairs)); })
       .catch(() => { if (!cancelled) setError('Some poll votes failed to load'); });
     return () => { cancelled = true; };
-  }, [demo, polls]);
+  }, [polls]);
 
-  const demoData = useMemo(() => (demo ? buildDemoDataset(now) : null), [demo, now]);
-
-  if (demo) return { data: demoData, error: null };
   if (members === null || plots === null || hours === null) return { data: null, error };
   return {
     data: {

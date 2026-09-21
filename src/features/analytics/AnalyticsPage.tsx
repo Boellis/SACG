@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { NavLink, Outlet, Route, Routes, useOutletContext } from 'react-router-dom';
 import './analytics.css';
-import { useAuth } from '../../auth/useAuth';
 import { useAnalyticsData } from './useAnalyticsData';
 import {
   resolveWindow, bucketFor,
@@ -15,7 +14,7 @@ import EngagementTab from './tabs/EngagementTab';
 
 export interface AlxContext {
   data: AnalyticsDataset; w: AnalyticsWindow; bucket: Bucket;
-  tokens: VizTokens; now: Date; demo: boolean;
+  tokens: VizTokens; now: Date;
 }
 export function useAlx(): AlxContext {
   return useOutletContext<AlxContext>();
@@ -36,42 +35,23 @@ const TABS = [
 
 function Shell() {
   const now = useMemo(() => new Date(), []);
-  const { user, member } = useAuth();
   const [range, setRange] = useState<RangeKey>('season');
-  // The demo choice is stored per account so a shared browser can't leak one
-  // account's preference into another's.
-  const demoKey = `alx-demo:${user?.uid ?? 'anon'}`;
-  const [demo, setDemo] = useState(() => localStorage.getItem(demoKey) === '1');
-  // Accounts flagged demoDefault (the template demo admin) start with demo
-  // data on until they explicitly choose otherwise.
-  useEffect(() => {
-    if (member?.demoDefault && localStorage.getItem(demoKey) === null) {
-      setDemo(true);
-    }
-  }, [member, demoKey]);
-  const { data, error } = useAnalyticsData(demo, now);
+  const { data, error } = useAnalyticsData();
 
   const seasonYear = Number(data?.settings.currentSeason) || now.getUTCFullYear();
   const w = useMemo(() => resolveWindow(range, now, seasonYear), [range, now, seasonYear]);
 
-  const toggleDemo = () => {
-    const next = !demo;
-    localStorage.setItem(demoKey, next ? '1' : '0');
-    setDemo(next);
-  };
   return (
     <div className="alx-root">
       <div className="alx-print-header">
         <h1 className="text-xl font-bold">South Austin Community Garden — Committee Report</h1>
         <p className="text-sm" style={{ color: 'var(--alx-text-2)' }}>
           {w.label} · generated {now.toLocaleDateString('en-US', { dateStyle: 'long' })}
-          {demo ? ' · DEMO DATA' : ''}
         </p>
       </div>
 
       <div className="alx-controls flex flex-wrap items-center gap-3 mb-4">
         <h1 className="text-xl font-bold mr-2">Analytics</h1>
-        {demo && <span className="alx-badge-demo">DEMO DATA</span>}
         <div className="flex gap-1" role="group" aria-label="Date range">
           {RANGES.map((r) => (
             <button key={r.key} type="button" onClick={() => setRange(r.key)}
@@ -81,10 +61,6 @@ function Shell() {
           ))}
         </div>
         <div className="ml-auto flex items-center gap-3">
-          <label className="text-xs flex items-center gap-1.5 cursor-pointer" style={{ color: 'var(--alx-text-2)' }}>
-            <input type="checkbox" checked={demo} onChange={toggleDemo} aria-label="Demo data" />
-            Demo data
-          </label>
           <button type="button" onClick={() => window.print()} className="alx-tab" style={{ border: '1px solid var(--alx-border)' }}>
             🖨 Print committee report
           </button>
@@ -106,7 +82,7 @@ function Shell() {
           ))}
         </div>
       ) : (
-        <Outlet context={{ data, w, bucket: bucketFor(range), tokens: VIZ, now, demo } satisfies AlxContext} />
+        <Outlet context={{ data, w, bucket: bucketFor(range), tokens: VIZ, now } satisfies AlxContext} />
       )}
     </div>
   );
