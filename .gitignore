@@ -11,6 +11,10 @@ build/
 .env.local
 .env.*.local
 
+# member-cleanup: never commit credentials or generated reports
+member-cleanup/serviceAccount.json
+member-cleanup/report-*.json
+
 # Firebase
 .firebase/
 # Firebase Extensions — local secret references (point to Secret Manager; never commit)
