@@ -1,5 +1,15 @@
 # Ghost-member cleanup
 
+> **⚠️ SUPERSEDED — do not run `--commit` without careful review.** The duplicate problem
+> this script targets was already solved in production (2026-07-11) by in-app reconciliation
+> (`a311aea`): a Cloud Function auto-merges **verified** sign-ins into their roster stub, and
+> the Waitlist page's **"Approve & merge"** covers unverified ones. The remaining `uid: null`
+> roster-stub members are **intentional** — they hold plots via `holderMemberId` until each
+> person signs in; deleting them would orphan those plots. This script also matches
+> ghost → real by **email alone**, so it could hand a stub's plot to an *unverified* password
+> signup — exactly the case the Cloud Function's verified-identity guard exists to block.
+> Kept for reference; a dry run is harmless.
+
 One-off admin migration to remove the Excel-imported **ghost** member profiles and hand
 their plots to the **real** account each person created when they signed up (mostly July 2026).
 
