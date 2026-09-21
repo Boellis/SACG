@@ -11,6 +11,18 @@
 //   • NO MATCH → skip the ghost entirely and report it (never orphan a plot).
 //   • DELETE  = ghost's Firestore profile doc only (Auth left untouched).
 //
+// Adapted to the real SACG schema (src/lib/types.ts):
+//   • members.displayName is the name field; members.uid = auth uid (null for
+//     Excel imports); member doc id = auth uid for real signups.
+//   • A plot references holders THREE ways, all kept in sync here:
+//       - holderMemberId   (primary holder — drives dues attribution)
+//       - holderMemberIds  (array incl. primary — source of truth for access)
+//       - holderName       (denormalized display name shown on the plot)
+//   • A ghost may also be a CO-HOLDER on someone else's plot (only present in
+//     holderMemberIds): the id is swapped in place, primary fields untouched.
+//   • The Members Lounge `directory/{memberId}` doc is deleted with the ghost
+//     so ghosts don't linger in the lounge directory.
+//
 // SAFETY: dry-run by default. Nothing is written unless you pass --commit.
 //   1) node cleanup-ghost-members.mjs            # dry run: prints the full plan
 //   2) *** take a Firestore backup / export ***
@@ -18,10 +30,6 @@
 //
 // Auth: set GOOGLE_APPLICATION_CREDENTIALS to a service-account JSON path, OR
 //       drop a serviceAccount.json next to this file.
-//
-// ⚠️ BEFORE --commit: confirm every field name in CONFIG matches the real
-//    schema (collection names, holder field on plots, createdAt type). The
-//    dry-run output tells you if the filters matched the counts you expect.
 // ───────────────────────────────────────────────────────────────────────────
 
 import fs from 'node:fs'
@@ -31,37 +39,41 @@ import admin from 'firebase-admin'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-// ===== CONFIG — adjust to the real project's schema ========================
+// ===== CONFIG — matched to the real SACG schema ============================
 const CONFIG = {
-  membersCollection: 'members',      // TODO confirm (could be 'users' / 'profiles')
-  plotsCollection: 'plots',          // TODO confirm
+  membersCollection: 'members',        // confirmed: src/data/collections.ts
+  plotsCollection: 'plots',            // confirmed: src/data/collections.ts
+  directoryCollection: 'directory',    // Members Lounge mirror, keyed by member id
 
   fields: {
-    email: 'email',                  // member email
-    name: 'name',                    // member display / full name
-    role: 'role',                    // member role
-    createdAt: 'createdAt',          // Firestore Timestamp, ISO string, or millis
+    email: 'email',
+    name: 'displayName',               // Member.displayName
+    role: 'role',
+    createdAt: 'createdAt',            // Firestore Timestamp
   },
 
-  // How a plot references its holder. The script uses the FIRST of these that
-  // exists on a given plot doc. Add/reorder to match the real model.
-  plotHolderFields: ['holderUid', 'holderId', 'memberId', 'holder', 'assignedTo'],
+  // Plot holder fields (all three kept in sync on reassignment).
+  plotPrimaryHolderField: 'holderMemberId',
+  plotHolderArrayField: 'holderMemberIds',
+  plotHolderNameField: 'holderName',
 
-  // Extra identifiers a plot's holder value might equal (besides the member
-  // doc id). Used to map a ghost's plot onto the real account's equivalent id.
-  memberIdFields: ['uid', 'authUid'],
+  // Ids besides the member doc id a plot's holder value could equal.
+  // (Excel-import ghosts have uid: null, so in practice ghosts are referenced
+  // by doc id — real accounts' doc id IS their auth uid.)
+  memberIdFields: ['uid'],
 
-  ghostDate: '2026-05-31',           // calendar day a ghost was created…
-  ghostTimezone: 'America/Chicago',  // …evaluated in this timezone (Austin)
+  ghostDate: '2026-05-31',             // calendar day a ghost was created…
+  ghostTimezone: 'America/Chicago',    // …evaluated in this timezone (Austin)
   memberRole: 'member',
 
   exclude: {
-    names: ['brandon ellis'],        // never treat these as ghosts (lowercased)
-    emails: [],                      // optionally add Brandon's email to be safe
+    names: ['brandon ellis'],          // never treat these as ghosts (lowercased)
+    emails: ['bellis.swe@gmail.com'],
   },
 
-  // If a matched real account ALREADY holds a (different) plot, skip & report
-  // instead of giving them a second plot. Set true only if double plots are ok.
+  // If a matched real account ALREADY primarily holds a (different) plot,
+  // skip & report instead of giving them a second plot. Co-holder swaps are
+  // not affected by this rule (shared access is preserved, not gained).
   allowRealToGainSecondPlot: false,
 }
 // ===========================================================================
@@ -100,16 +112,13 @@ function memberIdentifiers(m) {
   for (const f of CONFIG.memberIdFields) if (m[f]) ids.add(m[f])
   return ids
 }
-function plotHolder(plot) {
-  for (const f of CONFIG.plotHolderFields) {
-    if (plot[f] !== undefined && plot[f] !== null && plot[f] !== '') return { field: f, value: plot[f] }
-  }
-  return null
-}
 
 async function main() {
   const db = initAdmin()
   const F = CONFIG.fields
+  const PRIMARY = CONFIG.plotPrimaryHolderField
+  const ARRAY = CONFIG.plotHolderArrayField
+  const HNAME = CONFIG.plotHolderNameField
   console.log(`\nMode: ${COMMIT ? '🔴 COMMIT (will write)' : '🟢 DRY RUN (no writes)'}\n`)
 
   // --- load members ---
@@ -141,35 +150,39 @@ async function main() {
     realByEmail.get(e).push(m)
   }
 
-  // --- load plots and index by holder value ---
+  // --- load plots and index holds by member identifier ---
   const plotSnap = await db.collection(CONFIG.plotsCollection).get()
   const plots = plotSnap.docs.map((d) => ({ id: d.id, ...d.data() }))
-  const plotsByHolder = new Map() // holderValue -> [{plot, field}]
+
+  // { primary: idValue -> [plot], coHolder: idValue -> [plot] }
+  const primaryByHolder = new Map()
+  const arrayByHolder = new Map()
   for (const p of plots) {
-    const h = plotHolder(p)
-    if (!h) continue
-    if (!plotsByHolder.has(h.value)) plotsByHolder.set(h.value, [])
-    plotsByHolder.get(h.value).push({ plot: p, field: h.field })
+    const pv = p[PRIMARY]
+    if (pv !== undefined && pv !== null && pv !== '') {
+      if (!primaryByHolder.has(pv)) primaryByHolder.set(pv, [])
+      primaryByHolder.get(pv).push(p)
+    }
+    for (const av of Array.isArray(p[ARRAY]) ? p[ARRAY] : []) {
+      if (!arrayByHolder.has(av)) arrayByHolder.set(av, [])
+      arrayByHolder.get(av).push(p)
+    }
   }
-  const plotsForMember = (m) => {
+  const lookup = (map, m) => {
     const out = []
-    for (const idv of memberIdentifiers(m)) if (plotsByHolder.has(idv)) out.push(...plotsByHolder.get(idv))
+    for (const idv of memberIdentifiers(m)) if (map.has(idv)) out.push(...map.get(idv))
     return out
   }
-  const newHolderValueFor = (ghost, real, holderValue) => {
-    // map the ghost's holder value onto the real account's equivalent id
-    if (holderValue === ghost.id) return real.id
-    for (const f of CONFIG.memberIdFields) if (holderValue === ghost[f]) return real[f] ?? real.id
-    return real.id
-  }
+  const dedupePlots = (arr) => [...new Map(arr.map((p) => [p.id, p])).values()]
+  const primaryPlotsFor = (m) => dedupePlots(lookup(primaryByHolder, m))
+  const anyHoldPlotsFor = (m) => dedupePlots([...lookup(primaryByHolder, m), ...lookup(arrayByHolder, m)])
 
   // --- build the plan ---
-  const plan = []   // { ghost, real, plotUpdates:[{plotId,field,from,to}] }
+  const plan = []    // { ghost, real, plotUpdates:[{plotId, changes:{field:{from,to}}}] }
   const skipped = [] // { ghost, reason }
 
   for (const ghost of ghosts) {
     const email = norm(ghost[F.email])
-    const gName = ghost[F.name] || '(no name)'
     if (!email) { skipped.push({ ghost, reason: 'ghost-has-no-email' }); continue }
 
     const candidates = (realByEmail.get(email) || []).filter((r) => r.id !== ghost.id)
@@ -177,30 +190,43 @@ async function main() {
     if (candidates.length > 1) { skipped.push({ ghost, reason: `ambiguous: ${candidates.length} real accounts share this email` }); continue }
     const real = candidates[0]
 
-    const ghostPlots = plotsForMember(ghost)
-    const realPlots = plotsForMember(real)
-    if (realPlots.length > 0 && ghostPlots.length > 0 && !CONFIG.allowRealToGainSecondPlot) {
-      skipped.push({ ghost, real, reason: `real account already holds a plot (${realPlots.map((x) => x.plot.id).join(', ')})` })
+    const ghostIds = memberIdentifiers(ghost)
+    const ghostPrimary = primaryPlotsFor(ghost)
+    const realPrimary = primaryPlotsFor(real)
+    if (realPrimary.length > 0 && ghostPrimary.length > 0 && !CONFIG.allowRealToGainSecondPlot) {
+      skipped.push({ ghost, real, reason: `real account already holds a plot (${realPrimary.map((p) => p.id).join(', ')})` })
       continue
     }
 
-    const plotUpdates = ghostPlots.map(({ plot, field }) => ({
-      plotId: plot.id,
-      field,
-      from: plot[field],
-      to: newHolderValueFor(ghost, real, plot[field]),
-    }))
+    const plotUpdates = []
+    for (const plot of anyHoldPlotsFor(ghost)) {
+      const changes = {}
+      if (ghostIds.has(plot[PRIMARY])) {
+        changes[PRIMARY] = { from: plot[PRIMARY], to: real.id }
+        const newName = real[F.name] || plot[HNAME] || ''
+        if (plot[HNAME] !== newName) changes[HNAME] = { from: plot[HNAME], to: newName }
+      }
+      const arr = Array.isArray(plot[ARRAY]) ? plot[ARRAY] : []
+      if (arr.some((v) => ghostIds.has(v))) {
+        const swapped = [...new Set(arr.map((v) => (ghostIds.has(v) ? real.id : v)))]
+        changes[ARRAY] = { from: arr, to: swapped }
+      }
+      if (Object.keys(changes).length) plotUpdates.push({ plotId: plot.id, changes })
+    }
     plan.push({ ghost, real, plotUpdates })
   }
 
   // --- print the plan ---
+  const fmt = (v) => (Array.isArray(v) ? `[${v.join(', ')}]` : v)
   const line = '─'.repeat(78)
   console.log(`\n${line}\nPLAN: ${plan.length} ghost(s) to reassign+delete, ${skipped.length} skipped\n${line}`)
   for (const { ghost, real, plotUpdates } of plan) {
-    console.log(`\n• DELETE ghost  ${ghost.id}  "${ghost[F.name]}"  <${ghost[F.email]}>`)
+    console.log(`\n• DELETE ghost  ${ghost.id}  "${ghost[F.name]}"  <${ghost[F.email]}>  (+ directory doc)`)
     console.log(`  → real       ${real.id}  "${real[F.name]}"  <${real[F.email]}>`)
     if (plotUpdates.length === 0) console.log('    (ghost holds no plots)')
-    for (const u of plotUpdates) console.log(`    plot ${u.plotId}: ${u.field}  ${u.from}  →  ${u.to}`)
+    for (const u of plotUpdates)
+      for (const [field, c] of Object.entries(u.changes))
+        console.log(`    plot ${u.plotId}: ${field}  ${fmt(c.from)}  →  ${fmt(c.to)}`)
   }
   if (skipped.length) {
     console.log(`\n${line}\nSKIPPED (left untouched — handle manually):\n${line}`)
@@ -230,11 +256,15 @@ async function main() {
     return
   }
 
-  // --- COMMIT: reassign plots, then delete ghost docs (batched ≤500 ops) ---
+  // --- COMMIT: reassign plots, then delete ghost profiles + directory docs ---
   console.log('\n🔴 Committing…')
   const ops = []
-  for (const { ghost, plotUpdates } of plan) {
-    for (const u of plotUpdates) ops.push({ ref: db.collection(CONFIG.plotsCollection).doc(u.plotId), data: { [u.field]: u.to } })
+  for (const { plotUpdates } of plan) {
+    for (const u of plotUpdates) {
+      const data = {}
+      for (const [field, c] of Object.entries(u.changes)) data[field] = c.to
+      ops.push({ ref: db.collection(CONFIG.plotsCollection).doc(u.plotId), data })
+    }
   }
   // apply plot reassignments first…
   for (let i = 0; i < ops.length; i += 450) {
@@ -242,14 +272,17 @@ async function main() {
     for (const op of ops.slice(i, i + 450)) batch.update(op.ref, op.data)
     await batch.commit()
   }
-  // …then delete the ghost profiles
-  const delRefs = plan.map(({ ghost }) => db.collection(CONFIG.membersCollection).doc(ghost.id))
+  // …then delete the ghost profiles + their lounge directory mirrors
+  const delRefs = plan.flatMap(({ ghost }) => [
+    db.collection(CONFIG.membersCollection).doc(ghost.id),
+    db.collection(CONFIG.directoryCollection).doc(ghost.id),
+  ])
   for (let i = 0; i < delRefs.length; i += 450) {
     const batch = db.batch()
     for (const ref of delRefs.slice(i, i + 450)) batch.delete(ref)
     await batch.commit()
   }
-  console.log(`✓ Reassigned ${ops.length} plot(s), deleted ${delRefs.length} ghost profile(s).`)
+  console.log(`✓ Updated ${ops.length} plot(s), deleted ${plan.length} ghost profile(s) (+ directory docs).`)
   console.log(`  ${skipped.length} skipped (see report).\n`)
 }
 

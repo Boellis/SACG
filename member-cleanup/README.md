@@ -3,14 +3,24 @@
 One-off admin migration to remove the Excel-imported **ghost** member profiles and hand
 their plots to the **real** account each person created when they signed up (mostly July 2026).
 
+> **Schema status:** the `CONFIG` block has been matched to this app's real schema
+> (`src/lib/types.ts`, `src/data/collections.ts`) — collections `members` / `plots` /
+> `directory`, name field `displayName`, and the three plot holder fields below.
+
 ## What it does
 - **Ghost** = a member (`role: 'member'`) created on **2026-05-31**, excluding **Brandon Ellis**.
 - **Match** ghost → real by **exact email** (case-insensitive). The real account is a
   non-ghost member doc with the same email.
-- **Reassign** every plot the ghost holds to the matched real account.
-- **Delete** the ghost's Firestore profile doc (Firebase **Auth is left alone**).
-- **No match / ambiguous / real already has a plot →** the ghost is **skipped and reported**,
-  never silently deleted and its plot never orphaned.
+- **Reassign** every plot the ghost primarily holds, keeping all three holder fields in sync:
+  `holderMemberId` → real's id, `holderName` → real's `displayName`, and the ghost's id is
+  swapped for the real id inside `holderMemberIds` (deduped).
+- **Co-holder plots** (ghost appears only in `holderMemberIds` on someone else's plot):
+  the id is swapped in place; the primary holder is untouched.
+- **Delete** the ghost's Firestore profile doc **and** its Members Lounge `directory/{id}`
+  mirror (Firebase **Auth is left alone**).
+- **No match / ambiguous / real already primarily holds a plot →** the ghost is **skipped
+  and reported**, never silently deleted and its plot never orphaned. (Co-holder swaps are
+  exempt from the second-plot rule — they preserve shared access rather than grant a plot.)
 
 ## ⚠️ Safety first — it's dry-run by default
 Nothing is written unless you pass `--commit`.
@@ -33,25 +43,22 @@ npm run dryrun
 npm run commit
 ```
 
-## Before you `--commit`: confirm the schema
-The script can't know your field names, so check the `CONFIG` block at the top of
-`cleanup-ghost-members.mjs` against the real app:
+## CONFIG ↔ real schema (already applied)
 
-| CONFIG key | Confirm it matches |
-|---|---|
-| `membersCollection` | the members/users/profiles collection name |
-| `plotsCollection` | the plots collection name |
-| `fields.email / name / role / createdAt` | the member field names |
-| `plotHolderFields` | the field a **plot** uses to reference its holder (uid vs member-id) |
-| `memberIdFields` | any id besides the doc id a plot's holder value could equal (`uid`, `authUid`) |
-| `ghostDate` / `ghostTimezone` | 2026-05-31 in the right timezone (default America/Chicago) |
+| CONFIG key | Value | Source |
+|---|---|---|
+| `membersCollection` / `plotsCollection` | `members` / `plots` | `src/data/collections.ts` |
+| `directoryCollection` | `directory` | Members Lounge mirror, doc id = member id |
+| `fields.name` | `displayName` | `Member.displayName` |
+| `plotPrimaryHolderField` | `holderMemberId` | primary holder, drives dues attribution |
+| `plotHolderArrayField` | `holderMemberIds` | all holders incl. primary (access source of truth) |
+| `plotHolderNameField` | `holderName` | denormalized display name on the plot |
+| `memberIdFields` | `['uid']` | Excel-import ghosts have `uid: null`; real doc id = auth uid |
+| `ghostDate` / `ghostTimezone` | `2026-05-31` / `America/Chicago` | import day, Austin time |
 
 **Sanity check:** the dry run prints `Ghost candidates: N`. If N isn't roughly the number of
 accounts you imported from Excel, stop and fix the filters/field names before committing.
 
 ## Notes
-- If plots are tracked on the **member** side (e.g. `member.plotId`) rather than a `plots`
-  collection, tell Claude to adapt the reassignment (copy the plot field ghost→real) — the
-  current script reassigns via the `plots` collection.
 - `serviceAccount.json` and `report-*.json` are git-ignored (never commit credentials).
 - Idempotent-ish: once ghosts are deleted, a re-run finds nothing to do.
