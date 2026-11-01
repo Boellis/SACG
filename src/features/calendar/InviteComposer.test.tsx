@@ -5,6 +5,7 @@ import type { Timestamp } from 'firebase/firestore';
 vi.mock('../email/emailJobsApi', () => ({
   queueMemberEmail: vi.fn(),
   listenEmailJob: vi.fn(() => vi.fn()),
+  newEmailJobId: vi.fn(),
 }));
 vi.mock('./eventsApi', () => ({
   listenRsvps: vi.fn(),
@@ -22,6 +23,7 @@ import type { GardenEvent, Member, Rsvp } from '../../lib/types';
 
 const mockedQueue = vi.mocked(emailJobsApiMod.queueMemberEmail);
 const mockedListenJob = vi.mocked(emailJobsApiMod.listenEmailJob);
+const mockedNewJobId = vi.mocked(emailJobsApiMod.newEmailJobId);
 const mockedListenRsvps = vi.mocked(eventsApiMod.listenRsvps);
 const mockedUseAuth = vi.mocked(useAuthMod.useAuth);
 
@@ -76,6 +78,8 @@ describe('InviteComposer', () => {
       return vi.fn();
     });
     mockedQueue.mockResolvedValue({ jobId: 'job-1', total: 3, skipped: 1 });
+    let ids = 0;
+    mockedNewJobId.mockImplementation(() => `job-id-${++ids}`);
     confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
   });
 
@@ -172,5 +176,69 @@ describe('InviteComposer', () => {
     renderComposer();
     fireEvent.click(screen.getByRole('button', { name: /^send test$/i }));
     expect(await screen.findByText(/no active members match that audience/i)).toBeInTheDocument();
+  });
+
+  // A failure can be ambiguous (the server queued the job, but the answer was lost): a re-click must not queue
+  // it again, so each send carries a job id the server queues at most once.
+  describe('job ids', () => {
+    const sentJobIds = () => mockedQueue.mock.calls.map(([input]) => input.jobId);
+    const sendToAll = () => fireEvent.click(screen.getByRole('button', { name: /send to 3 members/i }));
+    const sendTest = () => fireEvent.click(screen.getByRole('button', { name: /^send test$/i }));
+
+    it('sends with a job id, and a retry after an error reuses it', async () => {
+      mockedQueue.mockRejectedValueOnce(new Error('internal'));
+      renderComposer();
+
+      sendToAll();
+      expect(await screen.findByRole('alert')).toHaveTextContent('internal');
+      sendToAll();
+
+      await waitFor(() => expect(mockedListenJob).toHaveBeenCalledWith('job-1', expect.any(Function)));
+      expect(sentJobIds()).toEqual(['job-id-1', 'job-id-1']);
+    });
+
+    it('gives the next send a new id once one went through', async () => {
+      mockedQueue
+        .mockResolvedValueOnce({ jobId: 'job-id-1', total: 1, skipped: 0 })
+        .mockResolvedValueOnce({ jobId: 'job-id-2', total: 1, skipped: 0 });
+      renderComposer();
+
+      sendTest();
+      await waitFor(() => expect(mockedListenJob).toHaveBeenCalledWith('job-id-1', expect.any(Function)));
+      sendTest();
+
+      await waitFor(() => expect(mockedListenJob).toHaveBeenCalledWith('job-id-2', expect.any(Function)));
+      expect(sentJobIds()).toEqual(['job-id-1', 'job-id-2']);
+    });
+
+    it("never gives the real send a failed test's id, and each keeps its own for a retry", async () => {
+      mockedQueue.mockRejectedValueOnce(new Error('internal')).mockRejectedValueOnce(new Error('internal'));
+      renderComposer();
+
+      sendTest(); // fails: job-id-1 stays the test's
+      await screen.findByRole('alert');
+      sendToAll(); // fails: job-id-2 is the real send's
+      await waitFor(() => expect(mockedQueue).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(screen.getByRole('button', { name: /^send test$/i })).toBeEnabled());
+      sendTest(); // the test again: its own id
+
+      await waitFor(() => expect(mockedListenJob).toHaveBeenCalledWith('job-1', expect.any(Function)));
+      expect(sentJobIds()).toEqual(['job-id-1', 'job-id-2', 'job-id-1']);
+      expect(mockedQueue.mock.calls[1][0]).not.toHaveProperty('testMemberId');
+    });
+
+    it('starts over with a new id when the composer is opened again', async () => {
+      mockedQueue.mockRejectedValueOnce(new Error('internal'));
+      const view = renderComposer();
+      sendToAll();
+      await screen.findByRole('alert');
+      view.unmount(); // closed
+
+      renderComposer();
+      sendToAll();
+
+      await waitFor(() => expect(mockedListenJob).toHaveBeenCalledWith('job-1', expect.any(Function)));
+      expect(sentJobIds()).toEqual(['job-id-1', 'job-id-2']);
+    });
   });
 });

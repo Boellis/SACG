@@ -1,7 +1,8 @@
 // Members' email addresses and phone numbers never go to the model. Structured
 // email/phone fields are simply never read into anything it sees; these
 // patterns catch the same details inside free text people typed (RSVP notes,
-// descriptions, display names).
+// descriptions, display names, and the admin's own messages, which often carry
+// a pasted member email).
 
 const EMAIL_IN_TEXT = /[^\s@(<"']+@[^\s@)>"',;]+/g;
 // With separators: 555-010-0142, (555) 010-0142, 555.010.0142, +1 555 010 0142, 010-0142.

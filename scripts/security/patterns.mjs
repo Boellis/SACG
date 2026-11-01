@@ -74,6 +74,7 @@ export const ALLOWED_EMAILS = [
 export const FORBIDDEN_PATHS = [
   /members_list/i,
   /^(?!scripts\/security\/fixtures\/).*\.csv$/i,
+  /\.xlsx$/i, // roster exports; binary, so never useful as a scanner fixture
   /serviceAccount.*\.json$/i,
   /-firebase-adminsdk-.*\.json$/i,
   /\.(pem|p12|key)$/i,

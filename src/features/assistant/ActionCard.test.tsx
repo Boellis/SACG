@@ -355,7 +355,7 @@ describe('ActionCard', () => {
     });
 
     it('shows Sending… while the server runs it, without buttons', () => {
-      renderCard(eventAction({ status: 'executing' }));
+      renderCard(eventAction({ status: 'executing', claimedAt: ts(new Date().toISOString()) }));
       expect(screen.getByText('Sending…')).toBeInTheDocument();
       expect(buttons()).toHaveLength(0);
     });
@@ -563,7 +563,17 @@ describe('ActionCard', () => {
 
       expect(mockedListenJob).toHaveBeenCalledWith('job-old-1', expect.any(Function));
       expect(mockedListenJob).toHaveBeenCalledWith('job-old-2', expect.any(Function));
-      expect(screen.getAllByText(/Test sent to Alice Example ✓/)).toHaveLength(2);
+      expect(screen.getAllByText(/Test queued for Alice Example ✓/)).toHaveLength(2);
+    });
+
+    it('says a test is queued, not sent, when its job id is unknown', async () => {
+      mockedExecute.mockResolvedValue({ status: 'proposed', result: {} });
+      renderCard(emailAction(), { actions: [eventExecuted] });
+
+      fireEvent.click(button('Send test'));
+
+      expect(await screen.findByText('Test queued for Brandon Ellis ✓')).toBeInTheDocument();
+      expect(screen.queryByText(/Test sent to/)).not.toBeInTheDocument();
     });
 
     it("doesn't list a test twice when its record arrives after the call returned", async () => {
@@ -780,11 +790,115 @@ describe('ActionCard', () => {
       );
 
       expect(screen.getByText('Done')).toBeInTheDocument();
-      expect(screen.getByText('Sent to 3 members ✓')).toBeInTheDocument();
+      expect(screen.getByText('Queued for 3 members ✓')).toBeInTheDocument();
+      expect(screen.getByText(/check Email → Recent emails for delivery status/)).toBeInTheDocument();
       expect(screen.getByText('1 skipped (no email address)')).toBeInTheDocument();
       expect(screen.getByText(/Approved by Brandon Ellis/)).toBeInTheDocument();
       expect(buttons()).toHaveLength(0);
       expect(screen.queryByLabelText('Send test to')).not.toBeInTheDocument();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // A run that stopped partway: 'executing' past its claim
+  // -------------------------------------------------------------------------
+
+  describe('a run that stopped partway', () => {
+    const LEASE_MS = 120_000; // EXECUTE_LEASE_MS in functions/src/assistant/actions.ts
+    const claimedAgo = (ms: number) => ts(new Date(Date.now() - ms).toISOString());
+    const eventExecuted = eventAction({ status: 'executed', result: { eventId: 'ev1', title: 'November Meeting' } });
+
+    it("follows a send that is still running by its job id, which is the action's id", () => {
+      renderCard(emailAction({ status: 'executing', claimedAt: claimedAgo(5_000) }), { actions: [eventExecuted] });
+
+      expect(screen.getByText('Sending…')).toBeInTheDocument();
+      expect(mockedListenJob).toHaveBeenCalledWith('a-email', expect.any(Function));
+      expect(screen.getByText('Queued…')).toBeInTheDocument();
+      expect(buttons()).toHaveLength(0); // a live run: nothing to click yet
+    });
+
+    it('offers Finish once the claim is older than the lease, and sends it once', async () => {
+      renderCard(eventAction({ status: 'executing', claimedAt: claimedAgo(LEASE_MS + 1_000) }));
+      const finish = button('Finish');
+
+      act(() => {
+        finish.click();
+        finish.click();
+      });
+
+      expect(mockedExecute).toHaveBeenCalledTimes(1);
+      expect(mockedExecute).toHaveBeenCalledWith({ threadId: 't1', actionId: 'a-event', mode: 'run' });
+      await waitFor(() => expect(button('Finish')).toBeDisabled()); // done: it waits for the live status
+    });
+
+    it('offers Finish for a stuck email too, next to its job progress', async () => {
+      renderCard(emailAction({ status: 'executing', claimedAt: claimedAgo(LEASE_MS + 1_000) }), { actions: [eventExecuted] });
+
+      expect(mockedListenJob).toHaveBeenCalledWith('a-email', expect.any(Function));
+      fireEvent.click(button('Finish'));
+
+      expect(mockedExecute).toHaveBeenCalledWith({ threadId: 't1', actionId: 'a-email', mode: 'run' });
+      expect(confirmSpy).not.toHaveBeenCalled(); // the admin already confirmed this send
+      await waitFor(() => expect(button('Finish')).toBeDisabled());
+    });
+
+    it('shows Finish by itself when a live claim lapses while the card is open', () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+      try {
+        vi.setSystemTime(new Date('2026-11-07T15:00:00Z'));
+        renderCard(eventAction({ status: 'executing', claimedAt: ts('2026-11-07T14:59:00Z') })); // claimed a minute ago
+        expect(screen.queryByRole('button', { name: 'Finish' })).not.toBeInTheDocument();
+
+        act(() => {
+          vi.advanceTimersByTime(LEASE_MS / 2 - 1_000);
+        });
+        expect(screen.queryByRole('button', { name: 'Finish' })).not.toBeInTheDocument();
+
+        act(() => {
+          vi.advanceTimersByTime(2_000);
+        });
+        expect(button('Finish')).toBeEnabled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("sends the admin's edits again, so a run that starts over sends what they approved", async () => {
+      mockedExecute.mockRejectedValueOnce(Object.assign(new Error('deadline-exceeded'), { code: 'functions/deadline-exceeded' }));
+      const view = renderCard(emailAction(), { actions: [eventExecuted] });
+      fireEvent.click(button('Edit'));
+      fireEvent.change(screen.getByLabelText('Subject'), { target: { value: 'Please RSVP: Nov 7' } });
+      fireEvent.click(button('Approve & send to everyone'));
+      await screen.findByRole('alert'); // the call failed, but its run had already claimed the action
+
+      view.update(emailAction({ status: 'executing', claimedAt: claimedAgo(LEASE_MS + 1_000) }), { actions: [eventExecuted] });
+      fireEvent.click(button('Finish'));
+
+      expect(mockedExecute).toHaveBeenCalledTimes(2);
+      expect(mockedExecute).toHaveBeenLastCalledWith({
+        threadId: 't1',
+        actionId: 'a-email',
+        mode: 'run',
+        overrides: { subject: 'Please RSVP: Nov 7' },
+      });
+      await waitFor(() => expect(button('Finish')).toBeDisabled());
+    });
+
+    it('says why Finish failed and lets the admin try again', async () => {
+      mockedExecute.mockRejectedValueOnce(
+        Object.assign(new Error('This action is already in progress.'), { code: 'functions/failed-precondition' }),
+      );
+      renderCard(eventAction({ status: 'executing', claimedAt: claimedAgo(LEASE_MS + 1_000) }));
+
+      fireEvent.click(button('Finish'));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('This action is already in progress.');
+      expect(button('Finish')).toBeEnabled();
+    });
+
+    it('treats a claim with no time as lapsed, as the server does', () => {
+      renderCard(pollAction({ status: 'executing' }));
+      expect(button('Finish')).toBeEnabled();
     });
   });
 

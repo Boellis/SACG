@@ -237,6 +237,9 @@ describe('scanPath', () => {
     ['data/members_list_2026.xlsx'],
     ['export/roster.csv'],
     ['export/ROSTER.CSV'],
+    ['export/roster.xlsx'],
+    ['Roster 2026.XLSX'],
+    ['scripts/security/fixtures/sample.xlsx'], // a spreadsheet is binary: no scanner test needs one as a fixture
     ['member-cleanup/serviceAccount.json'],
     ['member-cleanup/serviceAccount-prod.json'],
     ['sacg-garden-app-firebase-adminsdk-abc12-0123456789.json'],
@@ -452,4 +455,25 @@ describe('scan-repo CLI', () => {
     expect(output(result)).not.toContain(awsKey);
     expect(output(result)).not.toContain(phone);
   }, 60_000);
+});
+
+describe('.gitignore', () => {
+  // The scanner rejects roster exports in CI; the ignore rules keep them (and agent worktrees nested in a
+  // checkout) out of `git add -A` in the first place. Exit status: 0 ignored, 1 not ignored.
+  const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
+  const checkIgnore = (path) => spawnSync('git', ['check-ignore', '--no-index', '-q', path], { cwd: repoRoot }).status;
+
+  it.each([['members.csv'], ['exports/roster.csv'], ['exports/roster.xlsx'], ['.claude/worktrees/agent-1/src/App.tsx']])(
+    'ignores %s',
+    (path) => {
+      expect(checkIgnore(path)).toBe(0);
+    },
+  );
+
+  it.each([['scripts/security/fixtures/sample.csv'], ['src/App.tsx'], ['.claude/settings.json']])(
+    'does not ignore %s',
+    (path) => {
+      expect(checkIgnore(path)).toBe(1);
+    },
+  );
 });

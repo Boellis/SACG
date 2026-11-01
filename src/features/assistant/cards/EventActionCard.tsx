@@ -117,6 +117,7 @@ export default function EventActionCard({ threadId, action }: CardProps<CreateEv
       onToggleEdit={() => setEditing((e) => !e)}
       approveLabel="Approve"
       onApprove={() => void runner.execute({ mode: 'run', overrides })}
+      overrides={overrides}
       invalid={problem !== null}
       done={
         <>

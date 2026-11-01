@@ -16,16 +16,23 @@ const QueueMemberEmailInput = z
     testMemberId: DocIdSchema.optional(),
     // Clients can't claim 'assistant'; only the assistant's own callable does.
     source: z.enum(['calendar', 'email-page']).default('calendar'),
+    // One id per send attempt, made by the client: a retry after an ambiguous failure reuses it and gets the job
+    // the first attempt queued instead of a second one (createEmailJob's fixed id).
+    jobId: DocIdSchema.optional(),
   })
   .strict();
 
-/** Admin-only: resolve an audience server-side and queue an email job. */
+/**
+ * Admin-only: resolve an audience server-side and queue an email job. With
+ * `jobId` the call is idempotent: a job already queued under that id is
+ * returned and nothing new is queued.
+ */
 export const queueMemberEmail = onCall({ region: REGION, timeoutSeconds: 60 }, async (request) => {
   const db = getFirestore();
   const caller = await requireAdmin(db, request.auth);
   const parsed = QueueMemberEmailInput.safeParse(request.data);
   if (!parsed.success) throw new HttpsError('invalid-argument', "That email request isn't valid.");
-  const { audience, subject, body, rsvpEventId, testMemberId, source } = parsed.data;
+  const { audience, subject, body, rsvpEventId, testMemberId, source, jobId } = parsed.data;
   return createEmailJob(db, {
     audience,
     subject,
@@ -35,6 +42,7 @@ export const queueMemberEmail = onCall({ region: REGION, timeoutSeconds: 60 }, a
     source,
     createdBy: caller.uid,
     createdByName: caller.displayName,
+    ...(jobId ? { jobId } : {}),
   });
 });
 

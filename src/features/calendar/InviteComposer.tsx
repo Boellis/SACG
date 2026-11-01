@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { listenRsvps } from './eventsApi';
 import { buildEmailBody } from './eventText';
-import { queueMemberEmail } from '../email/emailJobsApi';
+import { newEmailJobId, queueMemberEmail } from '../email/emailJobsApi';
 import { formatGardenDate } from '../../lib/gardenTime';
 import { inviteAudienceCounts } from '../../logic/rsvp';
 import { MemberPicker } from '../../components/MemberPicker';
@@ -10,6 +10,7 @@ import { Button, Modal } from '../../components/ui';
 import type { Audience, GardenEvent, Member, Rsvp } from '../../lib/types';
 
 type Mode = 'all' | 'pending' | 'one';
+type SendKind = 'test' | 'real';
 
 interface InviteComposerProps {
   event: GardenEvent;
@@ -42,6 +43,10 @@ export default function InviteComposer({ event, members, me, onClose }: InviteCo
   const [error, setError] = useState('');
   const [job, setJob] = useState<{ id: string; test: boolean } | null>(null);
   const sending = useRef(false); // blocks a double click before `busy` re-renders
+  // The job id of a test or real send that hasn't gone through yet. A failed call may still have queued its job
+  // (only the answer was lost), so clicking again reuses the id and the server queues it at most once. A test
+  // and the real send never share one; after a success, or once the composer is closed, a send gets a new one.
+  const pendingJobIds = useRef<Partial<Record<SendKind, string>>>({});
 
   useEffect(() => listenRsvps(event.id, setRsvps), [event.id]);
 
@@ -69,6 +74,9 @@ export default function InviteComposer({ event, members, me, onClose }: InviteCo
     sending.current = true;
     setBusy(true);
     setError('');
+    const kind: SendKind = testMemberId ? 'test' : 'real';
+    const jobId = pendingJobIds.current[kind] ?? newEmailJobId();
+    pendingJobIds.current[kind] = jobId;
     try {
       const res = await queueMemberEmail({
         audience,
@@ -76,8 +84,10 @@ export default function InviteComposer({ event, members, me, onClose }: InviteCo
         body,
         rsvpEventId: event.id,
         source: 'calendar',
+        jobId,
         ...(testMemberId ? { testMemberId } : {}),
       });
+      pendingJobIds.current[kind] = undefined; // it went through: the next send is a new one
       setJob({ id: res.jobId, test: Boolean(testMemberId) });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't send.");

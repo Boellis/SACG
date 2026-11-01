@@ -158,8 +158,14 @@ describe('deploy-prod.yml', () => {
     expect(text).not.toMatch(/skip-functions|SMOKE_SKIP_FUNCTIONS/);
   });
 
+  it('rolls Hosting back when the run fails or is cancelled (a timeout included), and never after a success', () => {
+    const rollback = text.slice(text.indexOf('- name: Roll Hosting back'));
+    expect(rollback).toMatch(/^ {8}if: \(failure\(\) \|\| cancelled\(\)\) && steps\.prev\.outputs\.prev_version != ''\n/m);
+    // always() or success() would undo a good deploy.
+    expect(rollback).not.toMatch(/always\(\)|success\(\)/);
+  });
+
   it('rolls Hosting back with the <site>@<version> form that firebase-tools 14.9.0 understands', () => {
-    expect(text).toMatch(/if: failure\(\) && steps\.prev\.outputs\.prev_version != ''/);
     expect(text).toContain('hosting:clone "sacg-garden-app@${version_id}" sacg-garden-app:live --project sacg-garden-app --non-interactive');
     // "<site>:@<version>" would be read as a channel called "@<version>" and fail
     expect(text).not.toMatch(/sacg-garden-app:@/);

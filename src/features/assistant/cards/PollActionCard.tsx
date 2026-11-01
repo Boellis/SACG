@@ -58,6 +58,7 @@ export default function PollActionCard({ threadId, action }: CardProps<PollActio
       onToggleEdit={() => setEditing((e) => !e)}
       approveLabel="Approve"
       onApprove={() => void runner.execute({ mode: 'run', overrides })}
+      overrides={overrides}
       invalid={problem !== null}
       done={
         <>
