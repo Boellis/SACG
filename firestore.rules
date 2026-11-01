@@ -6,6 +6,13 @@ service cloud.firestore {
     function memberData() { return get(/databases/$(database)/documents/members/$(request.auth.uid)).data; }
     function isAdmin() { return signedIn() && exists_(request.auth.uid) && memberData().role == 'admin'; }
     function isActive() { return signedIn() && exists_(request.auth.uid) && memberData().status == 'active'; }
+    // A member's own RSVP: known keys only, a real answer, a sane party size and note.
+    function validRsvp(d) {
+      return d.keys().hasOnly(['status', 'displayName', 'respondedAt', 'partySize', 'note', 'source'])
+        && d.status in ['yes', 'no', 'maybe']
+        && (!('partySize' in d) || (d.partySize is int && d.partySize >= 1 && d.partySize <= 20))
+        && (!('note' in d) || (d.note is string && d.note.size() <= 500));
+    }
 
     match /settings/{doc} {
       allow read: if isActive() || isAdmin();
@@ -38,7 +45,33 @@ service cloud.firestore {
       allow write: if isAdmin();
       match /rsvps/{uid} {
         allow read: if isActive() || isAdmin();
-        allow write: if isAdmin() || (signedIn() && request.auth.uid == uid);
+        allow create, update: if isAdmin()
+          || (signedIn() && request.auth.uid == uid && validRsvp(request.resource.data));
+        allow delete: if isAdmin() || (signedIn() && request.auth.uid == uid);
+      }
+    }
+
+    // Server-only: RSVP link tokens and the assistant's daily usage counters.
+    match /rsvpInvites/{token} {
+      allow read, write: if false;
+    }
+    match /assistantUsage/{doc} {
+      allow read, write: if false;
+    }
+
+    // Member email jobs: admins watch progress; only Cloud Functions write.
+    match /emailJobs/{id} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // AI assistant threads and everything beneath them: admin read, server write.
+    match /assistantThreads/{id} {
+      allow read: if isAdmin();
+      allow write: if false;
+      match /{sub=**} {
+        allow read: if isAdmin();
+        allow write: if false;
       }
     }
 

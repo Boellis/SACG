@@ -149,6 +149,19 @@ describe('Dashboard — Admin view', () => {
     );
     expect(screen.getAllByText('1').length).toBeGreaterThan(0);
   });
+
+  it('has an AI Assistant card that opens /assistant', () => {
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole('heading', { name: 'AI Assistant' })).toBeInTheDocument();
+    expect(
+      screen.getByText("Paste a member's request; it drafts the email, calendar event and RSVP for you to approve."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /open assistant/i })).toHaveAttribute('href', '/assistant');
+  });
 });
 
 describe('Dashboard — Member view', () => {
@@ -206,6 +219,16 @@ describe('Dashboard — Member view', () => {
     // Other plots should not appear
     expect(screen.queryByText('plot-B')).not.toBeInTheDocument();
     expect(screen.queryByText('plot-C')).not.toBeInTheDocument();
+  });
+
+  it('does not show the admin-only AI Assistant card', () => {
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+    expect(screen.queryByText('AI Assistant')).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /assistant/i })).not.toBeInTheDocument();
   });
 
   it('shows volunteer hours 4 / 12', async () => {

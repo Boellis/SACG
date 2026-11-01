@@ -29,6 +29,7 @@ const adminNavItems: NavItem[] = [
   { to: '/dues', label: 'Dues' },
   { to: '/settings', label: 'Settings' },
   { to: '/email', label: 'Email' },
+  { to: '/assistant', label: 'AI Assistant' },
 ];
 
 function NavItems({ onNavigate }: { onNavigate?: () => void }) {

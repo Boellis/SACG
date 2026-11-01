@@ -1,0 +1,24 @@
+# Weekly dependency updates, all opened against `dev` (the integration branch) so they
+# travel through dev -> test -> prod like any other change.
+# Security updates are separate: GitHub opens those against the default branch (dev).
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    target-branch: dev
+    open-pull-requests-limit: 5
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: npm
+    directory: /functions
+    target-branch: dev
+    open-pull-requests-limit: 5
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: weekly

@@ -5,6 +5,7 @@ import {
   assertSucceeds,
   assertFails,
   RulesTestEnvironment,
+  type RulesTestContext,
 } from '@firebase/rules-unit-testing';
 import { doc, getDoc, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 
@@ -333,6 +334,129 @@ describe('Firestore security rules — events/rsvps & mail', () => {
     await assertFails(setDoc(doc(activeDb, 'mail', 'M1'), mailDoc));
     const adminDb = testEnv.authenticatedContext('admin1').firestore();
     await assertSucceeds(setDoc(doc(adminDb, 'mail', 'M1'), mailDoc));
+  });
+});
+
+describe('Firestore security rules — validated RSVP self-writes', () => {
+  const rsvp = (over: Record<string, unknown> = {}) => ({
+    status: 'yes',
+    displayName: 'Active One',
+    respondedAt: NOW,
+    ...over,
+  });
+  const ownRsvp = (db: ReturnType<RulesTestContext['firestore']>) => doc(db, 'events', 'E1', 'rsvps', 'active1');
+
+  it('46. active1 writes own rsvp with partySize 2, a note and source SUCCEEDS', async () => {
+    const db = testEnv.authenticatedContext('active1').firestore();
+    await assertSucceeds(setDoc(ownRsvp(db), rsvp({ partySize: 2, note: 'hi', source: 'app' })));
+    await assertSucceeds(setDoc(ownRsvp(db), rsvp({ status: 'no', note: 'x'.repeat(500) })));
+  });
+
+  it.each([
+    ['partySize 50', { partySize: 50 }],
+    ['partySize 0', { partySize: 0 }],
+    ['a fractional partySize', { partySize: 2.5 }],
+    ['a string partySize', { partySize: '2' }],
+    ['a note of 501 chars', { note: 'x'.repeat(501) }],
+    ['a non-string note', { note: 42 }],
+    ["status 'sure'", { status: 'sure' }],
+    ['an extra key email', { email: 'a1@x.com' }],
+  ])('47. active1 writes own rsvp with %s FAILS', async (_label, over) => {
+    const db = testEnv.authenticatedContext('active1').firestore();
+    await assertFails(setDoc(ownRsvp(db), rsvp(over)));
+  });
+
+  it("48. active1 writes active2's rsvp FAILS even when valid; anon writes FAIL", async () => {
+    const db = testEnv.authenticatedContext('active1').firestore();
+    await assertFails(setDoc(doc(db, 'events', 'E1', 'rsvps', 'active2'), rsvp({ partySize: 1 })));
+    const anon = testEnv.unauthenticatedContext().firestore();
+    await assertFails(setDoc(doc(anon, 'events', 'E1', 'rsvps', 'active1'), rsvp()));
+  });
+
+  it("49. active1 deletes own rsvp SUCCEEDS, not active2's; admin1 deletes any SUCCEEDS", async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const seedDb = ctx.firestore();
+      await setDoc(doc(seedDb, 'events', 'E1', 'rsvps', 'active1'), rsvp());
+      await setDoc(doc(seedDb, 'events', 'E1', 'rsvps', 'active2'), rsvp({ displayName: 'Active Two' }));
+    });
+    const db = testEnv.authenticatedContext('active1').firestore();
+    await assertSucceeds(deleteDoc(doc(db, 'events', 'E1', 'rsvps', 'active1')));
+    await assertFails(deleteDoc(doc(db, 'events', 'E1', 'rsvps', 'active2')));
+    const adminDb = testEnv.authenticatedContext('admin1').firestore();
+    await assertSucceeds(deleteDoc(doc(adminDb, 'events', 'E1', 'rsvps', 'active2')));
+  });
+
+  it("50. admin1 writes any member's rsvp, unvalidated, SUCCEEDS (admin writes unchanged)", async () => {
+    const db = testEnv.authenticatedContext('admin1').firestore();
+    await assertSucceeds(setDoc(doc(db, 'events', 'E1', 'rsvps', 'active2'), rsvp({ partySize: 50, extra: true })));
+  });
+});
+
+describe('Firestore security rules — server-only RSVP, email-job & assistant data', () => {
+  beforeEach(async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore();
+      await setDoc(doc(db, 'rsvpInvites', 'TOKEN1'), { eventId: 'E1', memberId: 'active1', uses: 0 });
+      await setDoc(doc(db, 'emailJobs', 'J1'), { subject: 'S', status: 'done', total: 1 });
+      await setDoc(doc(db, 'assistantThreads', 'TH1'), { title: 'Nov 7 RSVP' });
+      await setDoc(doc(db, 'assistantThreads', 'TH1', 'messages', 'M1'), { role: 'user' });
+      await setDoc(doc(db, 'assistantThreads', 'TH1', 'actions', 'A1'), { status: 'proposed' });
+      await setDoc(doc(db, 'assistantUsage', 'admin1_2026-11-01'), { turns: 1 });
+    });
+  });
+
+  const paths: Array<[string, ...string[]]> = [
+    ['rsvpInvites', 'TOKEN1'],
+    ['emailJobs', 'J1'],
+    ['assistantThreads', 'TH1'],
+    ['assistantThreads', 'TH1', 'messages', 'M1'],
+    ['assistantUsage', 'admin1_2026-11-01'],
+  ];
+
+  it('51. anon reads of rsvpInvites, emailJobs, assistantThreads (+ messages), assistantUsage FAIL', async () => {
+    const db = testEnv.unauthenticatedContext().firestore();
+    for (const [col, ...rest] of paths) await assertFails(getDoc(doc(db, col, ...rest)));
+  });
+
+  it('52. admin1 reads rsvpInvites / assistantUsage FAIL (server-only)', async () => {
+    const db = testEnv.authenticatedContext('admin1').firestore();
+    await assertFails(getDoc(doc(db, 'rsvpInvites', 'TOKEN1')));
+    await assertFails(getDoc(doc(db, 'assistantUsage', 'admin1_2026-11-01')));
+  });
+
+  it('53. active1 reads emailJobs FAILS; admin1 reads emailJobs SUCCEEDS', async () => {
+    await assertFails(getDoc(doc(testEnv.authenticatedContext('active1').firestore(), 'emailJobs', 'J1')));
+    await assertSucceeds(getDoc(doc(testEnv.authenticatedContext('admin1').firestore(), 'emailJobs', 'J1')));
+  });
+
+  it('54. admin1 reads assistantThreads, messages and actions SUCCEEDS; active1 FAILS', async () => {
+    const adminDb = testEnv.authenticatedContext('admin1').firestore();
+    await assertSucceeds(getDoc(doc(adminDb, 'assistantThreads', 'TH1')));
+    await assertSucceeds(getDoc(doc(adminDb, 'assistantThreads', 'TH1', 'messages', 'M1')));
+    await assertSucceeds(getDoc(doc(adminDb, 'assistantThreads', 'TH1', 'actions', 'A1')));
+    const memberDb = testEnv.authenticatedContext('active1').firestore();
+    await assertFails(getDoc(doc(memberDb, 'assistantThreads', 'TH1')));
+    await assertFails(getDoc(doc(memberDb, 'assistantThreads', 'TH1', 'messages', 'M1')));
+  });
+
+  it('55. admin1 writes to emailJobs and assistantThreads (incl. beneath) FAIL', async () => {
+    const db = testEnv.authenticatedContext('admin1').firestore();
+    await assertFails(setDoc(doc(db, 'emailJobs', 'J2'), { subject: 'S', status: 'queued' }));
+    await assertFails(updateDoc(doc(db, 'emailJobs', 'J1'), { status: 'queued' }));
+    await assertFails(setDoc(doc(db, 'assistantThreads', 'TH2'), { title: 't' }));
+    await assertFails(setDoc(doc(db, 'assistantThreads', 'TH1', 'messages', 'M2'), { role: 'user' }));
+    await assertFails(updateDoc(doc(db, 'assistantThreads', 'TH1', 'actions', 'A1'), { status: 'executed' }));
+  });
+
+  it('56. nobody writes rsvpInvites or assistantUsage from a client', async () => {
+    for (const db of [
+      testEnv.authenticatedContext('admin1').firestore(),
+      testEnv.authenticatedContext('active1').firestore(),
+      testEnv.unauthenticatedContext().firestore(),
+    ]) {
+      await assertFails(setDoc(doc(db, 'rsvpInvites', 'TOKEN2'), { eventId: 'E1', memberId: 'active1', uses: 0 }));
+      await assertFails(setDoc(doc(db, 'assistantUsage', 'admin1_2026-11-02'), { turns: 0 }));
+    }
   });
 });
 
