@@ -18,6 +18,12 @@ vi.mock('../members/membersApi', () => ({
   listenMembers: vi.fn(),
 }));
 
+// Mock the email-job API behind the RSVP invitation composer
+vi.mock('../email/emailJobsApi', () => ({
+  queueMemberEmail: vi.fn().mockResolvedValue({ jobId: 'job-1', total: 2, skipped: 0 }),
+  listenEmailJob: vi.fn(() => vi.fn()),
+}));
+
 // Mock useAuth
 vi.mock('../../auth/useAuth', () => ({
   useAuth: vi.fn(),
@@ -44,12 +50,15 @@ import * as eventsApiMod from './eventsApi';
 import * as membersApiMod from '../members/membersApi';
 import * as useAuthMod from '../../auth/useAuth';
 import CalendarPage from './CalendarPage';
+import type { Rsvp } from '../../lib/types';
 
 const mockedListenEvents = vi.mocked(eventsApiMod.listenEvents);
 const mockedListenRsvps = vi.mocked(eventsApiMod.listenRsvps);
 const mockedSetRsvp = vi.mocked(eventsApiMod.setRsvp);
 const mockedListenMembers = vi.mocked(membersApiMod.listenMembers);
 const mockedUseAuth = vi.mocked(useAuthMod.useAuth);
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Build a fake GardenEvent fixture */
 function makeEvent(overrides: Partial<{
@@ -62,7 +71,9 @@ function makeEvent(overrides: Partial<{
   location: string;
   description: string;
 }> = {}) {
-  const startDate = overrides.startDate ?? new Date(Date.now() + 3 * 24 * 60 * 60 * 1000); // 3 days from now
+  // 40 days out: always upcoming, and never inside the month grid on screen
+  // (which would render the title a second time and make text queries ambiguous).
+  const startDate = overrides.startDate ?? new Date(Date.now() + 40 * DAY_MS);
   const endDate = overrides.endDate ?? new Date(startDate.getTime() + 2 * 60 * 60 * 1000);
   return {
     id: overrides.id ?? 'event-1',
@@ -98,6 +109,53 @@ const memberFixtures = [
   makeMember({ id: 'pending-1', email: 'pending@test.com', displayName: 'Pending User', status: 'pending' }),
 ];
 
+/** RSVPs for headcount tests: 3 + 1 people coming, a maybe of 2, a no. */
+const headcountRsvps = [
+  { id: 'active-1', status: 'yes', displayName: 'Alice', partySize: 3, note: 'veggie', source: 'email', respondedAt: {} },
+  { id: 'active-2', status: 'yes', displayName: 'Bob', source: 'app', respondedAt: {} },
+  { id: 'user-c', status: 'maybe', displayName: 'Carol', partySize: 2, respondedAt: {} },
+  { id: 'user-d', status: 'no', displayName: 'Dan', respondedAt: {} },
+] as unknown as Rsvp[];
+
+function asAdmin() {
+  mockedUseAuth.mockReturnValue({
+    user: { uid: 'admin-uid' } as any,
+    member: makeMember({ id: 'admin-uid', role: 'admin', displayName: 'Ada Admin' }) as any,
+    role: 'admin',
+    status: 'active',
+    loading: false,
+  });
+}
+
+function withEvents(...events: ReturnType<typeof makeEvent>[]) {
+  mockedListenEvents.mockImplementation((cb) => {
+    cb(events as any);
+    return vi.fn();
+  });
+}
+
+function withRsvps(rsvps: Rsvp[]) {
+  mockedListenRsvps.mockImplementation((_eventId, cb) => {
+    cb(rsvps);
+    return vi.fn();
+  });
+}
+
+function renderPage() {
+  return render(
+    <MemoryRouter>
+      <CalendarPage />
+    </MemoryRouter>,
+  );
+}
+
+async function openDetails() {
+  fireEvent.click(screen.getByRole('button', { name: /^details$/i }));
+  await waitFor(() => {
+    expect(screen.getByText('RSVP')).toBeInTheDocument();
+  });
+}
+
 describe('CalendarPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -112,10 +170,7 @@ describe('CalendarPage', () => {
     });
 
     // Default: listenRsvps yields empty
-    mockedListenRsvps.mockImplementation((_eventId, cb) => {
-      cb([]);
-      return vi.fn();
-    });
+    withRsvps([]);
 
     // Default: listenMembers yields fixture members
     mockedListenMembers.mockImplementation((cb) => {
@@ -125,65 +180,26 @@ describe('CalendarPage', () => {
   });
 
   it('renders event title in the upcoming list', () => {
-    const fixture = makeEvent({ title: 'Spring Cleanup Workday' });
-
-    mockedListenEvents.mockImplementation((cb) => {
-      cb([fixture] as any);
-      return vi.fn();
-    });
-
-    render(
-      <MemoryRouter>
-        <CalendarPage />
-      </MemoryRouter>,
-    );
-
+    withEvents(makeEvent({ title: 'Spring Cleanup Workday' }));
+    renderPage();
     expect(screen.getByText('Spring Cleanup Workday')).toBeInTheDocument();
   });
 
   it('shows the Upcoming Events section heading', () => {
-    mockedListenEvents.mockImplementation((cb) => {
-      cb([]);
-      return vi.fn();
-    });
-
-    render(
-      <MemoryRouter>
-        <CalendarPage />
-      </MemoryRouter>,
-    );
-
+    withEvents();
+    renderPage();
     expect(screen.getByText('Upcoming Events')).toBeInTheDocument();
   });
 
   it('shows "No upcoming events" when list is empty', () => {
-    mockedListenEvents.mockImplementation((cb) => {
-      cb([]);
-      return vi.fn();
-    });
-
-    render(
-      <MemoryRouter>
-        <CalendarPage />
-      </MemoryRouter>,
-    );
-
+    withEvents();
+    renderPage();
     expect(screen.getByText('No upcoming events.')).toBeInTheDocument();
   });
 
   it('clicking an event opens detail modal with title', async () => {
-    const fixture = makeEvent({ title: 'Board Meeting' });
-
-    mockedListenEvents.mockImplementation((cb) => {
-      cb([fixture] as any);
-      return vi.fn();
-    });
-
-    render(
-      <MemoryRouter>
-        <CalendarPage />
-      </MemoryRouter>,
-    );
+    withEvents(makeEvent({ title: 'Board Meeting' }));
+    renderPage();
 
     // Click the event in upcoming list
     fireEvent.click(screen.getByText('Board Meeting'));
@@ -195,100 +211,80 @@ describe('CalendarPage', () => {
   });
 
   it('clicking Yes in modal calls setRsvp with member id and "yes"', async () => {
-    const fixture = makeEvent({ id: 'event-test-1', title: 'Harvest Fest' });
-
-    mockedListenEvents.mockImplementation((cb) => {
-      cb([fixture] as any);
-      return vi.fn();
-    });
-
-    render(
-      <MemoryRouter>
-        <CalendarPage />
-      </MemoryRouter>,
-    );
+    withEvents(makeEvent({ id: 'event-test-1', title: 'Harvest Fest' }));
+    renderPage();
 
     // Open modal
     fireEvent.click(screen.getByText('Harvest Fest'));
-
     await waitFor(() => {
       expect(screen.getByText('RSVP')).toBeInTheDocument();
     });
 
     // Click Yes
-    const yesButton = screen.getByRole('button', { name: /^yes$/i });
-    fireEvent.click(yesButton);
+    fireEvent.click(screen.getByRole('button', { name: /^yes$/i }));
 
     await waitFor(() => {
-      expect(mockedSetRsvp).toHaveBeenCalledWith(
-        'event-test-1',
-        'member-uid',
-        'yes',
-        'Test Member',
-      );
+      expect(mockedSetRsvp).toHaveBeenCalledWith('event-test-1', 'member-uid', 'yes', 'Test Member', {
+        partySize: 1,
+        note: '',
+      });
     });
   });
 
-  it('does not show "New event" button for regular members', () => {
-    mockedListenEvents.mockImplementation((cb) => {
-      cb([]);
-      return vi.fn();
+  it('member RSVP yes with a party size of 3 saves partySize 3', async () => {
+    withEvents(makeEvent({ id: 'event-party', title: 'Potluck Workday' }));
+    renderPage();
+    await openDetails();
+
+    // The party-size question only appears once yes/maybe is chosen.
+    expect(screen.queryByLabelText(/how many people, including you/i)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^yes$/i }));
+    fireEvent.change(await screen.findByLabelText(/how many people, including you/i), { target: { value: '3' } });
+    expect(screen.getByLabelText(/note for organizers/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /save rsvp/i }));
+
+    await waitFor(() => {
+      expect(mockedSetRsvp).toHaveBeenLastCalledWith('event-party', 'member-uid', 'yes', 'Test Member', {
+        partySize: 3,
+        note: '',
+      });
     });
+  });
 
-    render(
-      <MemoryRouter>
-        <CalendarPage />
-      </MemoryRouter>,
-    );
+  it('a No answer hides the party-size question and sends no party size', async () => {
+    withEvents(makeEvent({ id: 'event-no' }));
+    renderPage();
+    await openDetails();
 
+    fireEvent.click(screen.getByRole('button', { name: /^no$/i }));
+
+    await waitFor(() => {
+      expect(mockedSetRsvp).toHaveBeenCalledWith('event-no', 'member-uid', 'no', 'Test Member', { note: '' });
+    });
+    expect(screen.queryByLabelText(/how many people, including you/i)).not.toBeInTheDocument();
+  });
+
+  it('does not show "New event" button for regular members', () => {
+    withEvents();
+    renderPage();
     expect(screen.queryByText('+ New Event')).not.toBeInTheDocument();
   });
 
   it('shows "New event" button for admins', () => {
-    mockedUseAuth.mockReturnValue({
-      user: { uid: 'admin-uid' } as any,
-      member: makeMember({ id: 'admin-uid', role: 'admin' }) as any,
-      role: 'admin',
-      status: 'active',
-      loading: false,
-    });
-
-    mockedListenEvents.mockImplementation((cb) => {
-      cb([]);
-      return vi.fn();
-    });
-
-    render(
-      <MemoryRouter>
-        <CalendarPage />
-      </MemoryRouter>,
-    );
-
+    asAdmin();
+    withEvents();
+    renderPage();
     expect(screen.getByText('+ New Event')).toBeInTheDocument();
   });
 
   it('shows RSVP counts in event modal', async () => {
-    const fixture = makeEvent({ id: 'event-rsvp-1', title: 'Rsvp Test Event' });
-
-    mockedListenEvents.mockImplementation((cb) => {
-      cb([fixture] as any);
-      return vi.fn();
-    });
-
-    mockedListenRsvps.mockImplementation((_eventId, cb) => {
-      cb([
-        { id: 'user-a', status: 'yes', displayName: 'Alice', respondedAt: {} as any },
-        { id: 'user-b', status: 'yes', displayName: 'Bob', respondedAt: {} as any },
-        { id: 'user-c', status: 'no', displayName: 'Carol', respondedAt: {} as any },
-      ]);
-      return vi.fn();
-    });
-
-    render(
-      <MemoryRouter>
-        <CalendarPage />
-      </MemoryRouter>,
-    );
+    withEvents(makeEvent({ id: 'event-rsvp-1', title: 'Rsvp Test Event' }));
+    withRsvps([
+      { id: 'user-a', status: 'yes', displayName: 'Alice', respondedAt: {} as any },
+      { id: 'user-b', status: 'yes', displayName: 'Bob', respondedAt: {} as any },
+      { id: 'user-c', status: 'no', displayName: 'Carol', respondedAt: {} as any },
+    ]);
+    renderPage();
 
     fireEvent.click(screen.getByText('Rsvp Test Event'));
 
@@ -309,46 +305,45 @@ describe('CalendarPage', () => {
     expect(texts.some((t) => t?.includes('no'))).toBe(true);
   });
 
-  // --- New tests for Details button and admin email ---
+  it('admin sees the expected headcount, counts and per-person lines', async () => {
+    asAdmin();
+    withEvents(makeEvent({ title: 'Headcount Event' }));
+    withRsvps(headcountRsvps);
+    renderPage();
+    await openDetails();
+
+    expect(screen.getByText('Expected headcount: 4 people')).toBeInTheDocument();
+    expect(screen.getByText(/2 yes · 1 maybe · 1 no/)).toBeInTheDocument();
+    expect(screen.getByText('Alice (×3) — "veggie"')).toBeInTheDocument();
+    expect(screen.getByText('Bob')).toBeInTheDocument();
+    expect(screen.getByText('Carol (×2)')).toBeInTheDocument();
+    // Only Alice answered from an email link.
+    expect(screen.getAllByText('email')).toHaveLength(1);
+  });
+
+  it('member does not see the headcount line or who responded', async () => {
+    withEvents(makeEvent({ title: 'Private Headcount Event' }));
+    withRsvps(headcountRsvps);
+    renderPage();
+    await openDetails();
+
+    expect(screen.queryByText(/expected headcount/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Alice/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Carol/)).not.toBeInTheDocument();
+  });
+
+  // --- Details button and admin email ---
 
   it('renders a "Details" button for each upcoming event', () => {
-    const fixture = makeEvent({ title: 'Upcoming Garden Event' });
-
-    mockedListenEvents.mockImplementation((cb) => {
-      cb([fixture] as any);
-      return vi.fn();
-    });
-
-    render(
-      <MemoryRouter>
-        <CalendarPage />
-      </MemoryRouter>,
-    );
-
-    const detailsBtn = screen.getByRole('button', { name: /^details$/i });
-    expect(detailsBtn).toBeInTheDocument();
+    withEvents(makeEvent({ title: 'Upcoming Garden Event' }));
+    renderPage();
+    expect(screen.getByRole('button', { name: /^details$/i })).toBeInTheDocument();
   });
 
   it('"Details" button opens the event modal with the event title', async () => {
-    const fixture = makeEvent({ title: 'Details Button Test Event', description: 'A great event' });
-
-    mockedListenEvents.mockImplementation((cb) => {
-      cb([fixture] as any);
-      return vi.fn();
-    });
-
-    render(
-      <MemoryRouter>
-        <CalendarPage />
-      </MemoryRouter>,
-    );
-
-    const detailsBtn = screen.getByRole('button', { name: /^details$/i });
-    fireEvent.click(detailsBtn);
-
-    await waitFor(() => {
-      expect(screen.getByText('RSVP')).toBeInTheDocument();
-    });
+    withEvents(makeEvent({ title: 'Details Button Test Event', description: 'A great event' }));
+    renderPage();
+    await openDetails();
 
     // Modal should show the event title as heading
     const headings = screen.getAllByText('Details Button Test Event');
@@ -358,108 +353,54 @@ describe('CalendarPage', () => {
     expect(screen.getByText('A great event')).toBeInTheDocument();
   });
 
-  it('admin sees "Email all members about this event" button in detail modal', async () => {
-    mockedUseAuth.mockReturnValue({
-      user: { uid: 'admin-uid' } as any,
-      member: makeMember({ id: 'admin-uid', role: 'admin' }) as any,
-      role: 'admin',
-      status: 'active',
-      loading: false,
-    });
+  it('admin sees "Send RSVP invitations…" in the detail modal', async () => {
+    asAdmin();
+    withEvents(makeEvent({ title: 'Admin Email Test Event' }));
+    renderPage();
+    await openDetails();
 
-    const fixture = makeEvent({ title: 'Admin Email Test Event' });
-
-    mockedListenEvents.mockImplementation((cb) => {
-      cb([fixture] as any);
-      return vi.fn();
-    });
-
-    render(
-      <MemoryRouter>
-        <CalendarPage />
-      </MemoryRouter>,
-    );
-
-    // Open modal via Details button
-    fireEvent.click(screen.getByRole('button', { name: /^details$/i }));
-
-    await waitFor(() => {
-      expect(screen.getByText('RSVP')).toBeInTheDocument();
-    });
-
-    expect(screen.getByRole('button', { name: /email all members about this event/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /send rsvp invitations/i })).toBeInTheDocument();
   });
 
-  it('admin email button opens Gmail URL with event title and active members BCC (not pending)', async () => {
-    mockedUseAuth.mockReturnValue({
-      user: { uid: 'admin-uid' } as any,
-      member: makeMember({ id: 'admin-uid', role: 'admin' }) as any,
-      role: 'admin',
-      status: 'active',
-      loading: false,
-    });
+  it('"Send RSVP invitations…" opens the invitation composer', async () => {
+    asAdmin();
+    withEvents(makeEvent({ title: 'Composer Event' }));
+    renderPage();
+    await openDetails();
 
-    const fixture = makeEvent({ title: 'Spring Harvest Fest' });
+    fireEvent.click(screen.getByRole('button', { name: /send rsvp invitations/i }));
 
-    mockedListenEvents.mockImplementation((cb) => {
-      cb([fixture] as any);
-      return vi.fn();
-    });
-
-    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
-
-    render(
-      <MemoryRouter>
-        <CalendarPage />
-      </MemoryRouter>,
-    );
-
-    // Open modal
-    fireEvent.click(screen.getByRole('button', { name: /^details$/i }));
-
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /email all members about this event/i })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /email all members about this event/i }));
-
-    expect(openSpy).toHaveBeenCalledTimes(1);
-    const calledUrl = openSpy.mock.calls[0][0] as string;
-
-    // URL should contain the event title (encoded)
-    expect(calledUrl).toContain(encodeURIComponent('Spring Harvest Fest'));
-
-    // URL should contain alice and bob's emails (active members)
-    expect(calledUrl).toContain(encodeURIComponent('alice@test.com'));
-    expect(calledUrl).toContain(encodeURIComponent('bob@test.com'));
-
-    // URL should NOT contain the pending member's email
-    expect(calledUrl).not.toContain(encodeURIComponent('pending@test.com'));
-
-    openSpy.mockRestore();
+    const subject = (await screen.findByLabelText(/^subject$/i)) as HTMLInputElement;
+    expect(subject.value.startsWith('RSVP: Composer Event — ')).toBe(true);
+    expect(screen.getByRole('button', { name: /^send test$/i })).toBeInTheDocument();
   });
 
-  it('non-admin member does NOT see "Email all members" button in detail modal', async () => {
-    // Already member by default
-    const fixture = makeEvent({ title: 'Member Only Test Event' });
+  it('the "Use mail app instead" fallback BCCs active members (not pending) about the event', async () => {
+    asAdmin();
+    withEvents(makeEvent({ title: 'Spring Harvest Fest' }));
+    renderPage();
+    await openDetails();
 
-    mockedListenEvents.mockImplementation((cb) => {
-      cb([fixture] as any);
-      return vi.fn();
-    });
+    const href = screen.getByRole('link', { name: /use mail app instead/i }).getAttribute('href') ?? '';
+    expect(href.startsWith('mailto:')).toBe(true);
 
-    render(
-      <MemoryRouter>
-        <CalendarPage />
-      </MemoryRouter>,
-    );
+    // The event title is the subject
+    expect(href).toContain(encodeURIComponent('Spring Harvest Fest'));
 
-    fireEvent.click(screen.getByRole('button', { name: /^details$/i }));
+    // Active members (alice, bob) are BCC'd
+    expect(href).toContain(encodeURIComponent('alice@test.com'));
+    expect(href).toContain(encodeURIComponent('bob@test.com'));
 
-    await waitFor(() => {
-      expect(screen.getByText('RSVP')).toBeInTheDocument();
-    });
+    // The pending member is not
+    expect(href).not.toContain(encodeURIComponent('pending@test.com'));
+  });
 
-    expect(screen.queryByRole('button', { name: /email all members about this event/i })).not.toBeInTheDocument();
+  it('non-admin member does NOT see the invitation button or the mail-app fallback', async () => {
+    withEvents(makeEvent({ title: 'Member Only Test Event' }));
+    renderPage();
+    await openDetails();
+
+    expect(screen.queryByRole('button', { name: /send rsvp invitations/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /use mail app instead/i })).not.toBeInTheDocument();
   });
 });

@@ -1,0 +1,119 @@
+import { describe, it, expect, beforeEach } from 'vitest';
+import type { CallableRequest } from 'firebase-functions/v2/https';
+import { testDb, clearFirestore } from '../testing/emulator';
+import { queueMemberEmail, onEmailJobCreated } from './callables';
+import { EMAIL_TRIGGER_TIMEOUT_S } from './jobs';
+
+const db = testDb();
+
+beforeEach(async () => {
+  await clearFirestore();
+  await db.doc('members/admin1').set({
+    displayName: 'Ada Admin',
+    email: 'ada@example.com',
+    role: 'admin',
+    status: 'active',
+  });
+  await db.doc('members/m-denny').set({
+    displayName: 'Denny Smith',
+    email: 'denny@example.com',
+    role: 'member',
+    status: 'active',
+  });
+  await db.doc('events/E1').set({ title: 'Fall Workday', type: 'workday' });
+});
+
+const call = (data: unknown, uid?: string) =>
+  queueMemberEmail.run({ data, auth: uid ? { uid, token: {} } : undefined, rawRequest: {} } as unknown as CallableRequest);
+
+const valid = { audience: { kind: 'all_active' }, subject: 'Hi {firstName}', body: 'Hello!' };
+const jobCount = async () => (await db.collection('emailJobs').get()).size;
+
+describe('queueMemberEmail', () => {
+  it('rejects anonymous callers', async () => {
+    await expect(call(valid)).rejects.toMatchObject({ code: 'unauthenticated' });
+  });
+
+  it('rejects non-admin members', async () => {
+    await expect(call(valid, 'm-denny')).rejects.toMatchObject({ code: 'permission-denied' });
+  });
+
+  it('rejects a raw-address audience', async () => {
+    await expect(
+      call({ ...valid, audience: { kind: 'emails', emails: ['evil@example.com'] } }, 'admin1'),
+    ).rejects.toMatchObject({ code: 'invalid-argument' });
+    expect(await jobCount()).toBe(0);
+  });
+
+  it("rejects unknown fields, including a client claiming the assistant's source", async () => {
+    await expect(call({ ...valid, source: 'assistant' }, 'admin1')).rejects.toMatchObject({
+      code: 'invalid-argument',
+    });
+    await expect(call({ ...valid, to: ['evil@example.com'] }, 'admin1')).rejects.toMatchObject({
+      code: 'invalid-argument',
+    });
+    expect(await jobCount()).toBe(0);
+  });
+
+  it('queues a job attributed to the calling admin, defaulting source to calendar', async () => {
+    const res = await call(valid, 'admin1');
+    expect(res).toEqual({ jobId: expect.any(String), total: 2, skipped: 0 });
+    expect((await db.doc(`emailJobs/${res.jobId}`).get()).data()).toMatchObject({
+      createdBy: 'admin1',
+      createdByName: 'Ada Admin',
+      source: 'calendar',
+      status: 'queued',
+    });
+  });
+
+  it('passes source, rsvpEventId and testMemberId through', async () => {
+    const res = await call({ ...valid, source: 'email-page', rsvpEventId: 'E1', testMemberId: 'm-denny' }, 'admin1');
+    expect(res.total).toBe(1);
+    expect((await db.doc(`emailJobs/${res.jobId}`).get()).data()).toMatchObject({
+      source: 'email-page',
+      rsvpEventId: 'E1',
+      test: true,
+    });
+  });
+
+  it("queues under the caller's job id once: a retry with the same id returns that job and queues nothing new", async () => {
+    const first = await call({ ...valid, rsvpEventId: 'E1', jobId: 'calendarSend01' }, 'admin1');
+    expect(first).toEqual({ jobId: 'calendarSend01', total: 2, skipped: 0 });
+    expect((await db.doc('emailJobs/calendarSend01').get()).data()).toMatchObject({ status: 'queued', source: 'calendar' });
+
+    // A re-click after an ambiguous failure: the first call did queue the job.
+    await expect(call({ ...valid, rsvpEventId: 'E1', jobId: 'calendarSend01' }, 'admin1')).resolves.toEqual(first);
+    expect(await jobCount()).toBe(1);
+  });
+
+  it("rejects a job id that isn't a document id", async () => {
+    for (const jobId of ['', 'a/b', 'x'.repeat(201), 42]) {
+      await expect(call({ ...valid, jobId }, 'admin1')).rejects.toMatchObject({ code: 'invalid-argument' });
+    }
+    expect(await jobCount()).toBe(0);
+  });
+
+  it('checks the caller is an admin before it looks at a job id', async () => {
+    await call({ ...valid, jobId: 'calendarSend02' }, 'admin1');
+    // An existing job's id gets a non-admin nothing: no job summary, no new job.
+    await expect(call({ ...valid, jobId: 'calendarSend02' }, 'm-denny')).rejects.toMatchObject({ code: 'permission-denied' });
+    await expect(call({ ...valid, jobId: 'calendarSend03' })).rejects.toMatchObject({ code: 'unauthenticated' });
+    expect(await jobCount()).toBe(1);
+  });
+});
+
+describe('onEmailJobCreated', () => {
+  it('runs with the pinned timeout and retries a failed run (which resumes the job)', () => {
+    expect(onEmailJobCreated.__endpoint).toMatchObject({
+      timeoutSeconds: EMAIL_TRIGGER_TIMEOUT_S,
+      eventTrigger: { retry: true },
+    });
+  });
+
+  it('processes the newly created job', async () => {
+    const { jobId } = await call({ ...valid, testMemberId: 'm-denny' }, 'admin1');
+    await onEmailJobCreated.run({ params: { jobId } } as unknown as Parameters<typeof onEmailJobCreated.run>[0]);
+    expect((await db.doc(`mail/${jobId}_m-denny`).get()).get('to')).toEqual(['denny@example.com']);
+    expect((await db.doc(`emailJobs/${jobId}`).get()).get('status')).toBe('done');
+  });
+});

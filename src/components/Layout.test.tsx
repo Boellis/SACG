@@ -77,4 +77,40 @@ describe('Layout nav links', () => {
     expect(screen.getByRole('link', { name: /dues/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /settings/i })).toBeInTheDocument();
   });
+
+  it('links admins to the AI Assistant', () => {
+    mockedUseAuth.mockReturnValue({
+      user: { uid: 'a1', email: 'admin@test.com' } as any,
+      member: { displayName: 'Admin User' } as any,
+      role: 'admin',
+      status: 'active',
+      loading: false,
+    });
+
+    render(
+      <MemoryRouter>
+        <Layout />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole('link', { name: 'AI Assistant' })).toHaveAttribute('href', '/assistant');
+  });
+
+  it('does not show the AI Assistant to members', () => {
+    mockedUseAuth.mockReturnValue({
+      user: { uid: 'u1', email: 'member@test.com' } as any,
+      member: { displayName: 'Test Member' } as any,
+      role: 'member',
+      status: 'active',
+      loading: false,
+    });
+
+    render(
+      <MemoryRouter>
+        <Layout />
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByRole('link', { name: /assistant/i })).not.toBeInTheDocument();
+  });
 });

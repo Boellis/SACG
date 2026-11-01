@@ -1,6 +1,7 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, connectAuthEmulator, GoogleAuthProvider } from 'firebase/auth';
 import { initializeFirestore, connectFirestoreEmulator } from 'firebase/firestore';
+import { getFunctions, connectFunctionsEmulator } from 'firebase/functions';
 import { getStorage } from 'firebase/storage';
 
 const firebaseConfig = {
@@ -19,6 +20,8 @@ export const auth = getAuth(app);
 // with optional fields across writes.
 export const db = initializeFirestore(app, { ignoreUndefinedProperties: true });
 export const storage = getStorage(app);
+// Callable Cloud Functions (same region as the functions codebase).
+export const functions = getFunctions(app, 'us-central1');
 export const googleProvider = new GoogleAuthProvider();
 
 // Only connect to local emulators during dev (`vite dev`). A production build
@@ -26,4 +29,5 @@ export const googleProvider = new GoogleAuthProvider();
 if (import.meta.env.DEV && import.meta.env.VITE_USE_EMULATORS === 'true') {
   connectAuthEmulator(auth, 'http://localhost:9099', { disableWarnings: true });
   connectFirestoreEmulator(db, 'localhost', 8080);
+  connectFunctionsEmulator(functions, 'localhost', 5001);
 }

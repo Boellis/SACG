@@ -30,7 +30,7 @@ const mkPlot = (p: Partial<Plot>): Plot => ({
 
 describe('normalizeEmail', () => {
   it('trims and lowercases', () => {
-    expect(normalizeEmail('  Donna.R719@Gmail.com ')).toBe('donna.r719@gmail.com');
+    expect(normalizeEmail('  Jane.Doe42@Example.COM ')).toBe('jane.doe42@example.com');
   });
   it('handles null/undefined', () => {
     expect(normalizeEmail(null)).toBe('');

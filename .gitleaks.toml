@@ -1,0 +1,26 @@
+# gitleaks config for CI (job `security-scan` in .github/workflows/ci.yml).
+# This repository is PUBLIC, so we extend the complete default ruleset and allow
+# only values that are provably not secrets. Never allowlist a real credential:
+# rotate it instead.
+title = "SACG gitleaks config"
+
+[extend]
+useDefault = true
+
+# A Firebase web API key is a public client identifier, not a secret: it ships in
+# every page load and access is enforced by Firebase Auth + Firestore/Storage
+# security rules. gitleaks reports it as `gcp-api-key` and, because the variable
+# is called VITE_FB_API_KEY, as `generic-api-key`. Both must match together: this
+# one file AND a Google-API-key-shaped value, so any other secret that ever lands
+# in .env.production is still reported.
+[[allowlists]]
+description = "Public Firebase web API key in .env.production"
+condition = "AND"
+targetRules = ["gcp-api-key", "generic-api-key"]
+paths = ['''^\.env\.production$''']
+regexes = ['''^AIza[0-9A-Za-z_-]{35}$''']
+
+# Deliberately fake secrets that exercise the scanners themselves.
+[[allowlists]]
+description = "Scanner test fixtures"
+paths = ['''^scripts/security/fixtures/''']
