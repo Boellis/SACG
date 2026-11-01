@@ -75,6 +75,31 @@ describe('queueMemberEmail', () => {
       test: true,
     });
   });
+
+  it("queues under the caller's job id once: a retry with the same id returns that job and queues nothing new", async () => {
+    const first = await call({ ...valid, rsvpEventId: 'E1', jobId: 'calendarSend01' }, 'admin1');
+    expect(first).toEqual({ jobId: 'calendarSend01', total: 2, skipped: 0 });
+    expect((await db.doc('emailJobs/calendarSend01').get()).data()).toMatchObject({ status: 'queued', source: 'calendar' });
+
+    // A re-click after an ambiguous failure: the first call did queue the job.
+    await expect(call({ ...valid, rsvpEventId: 'E1', jobId: 'calendarSend01' }, 'admin1')).resolves.toEqual(first);
+    expect(await jobCount()).toBe(1);
+  });
+
+  it("rejects a job id that isn't a document id", async () => {
+    for (const jobId of ['', 'a/b', 'x'.repeat(201), 42]) {
+      await expect(call({ ...valid, jobId }, 'admin1')).rejects.toMatchObject({ code: 'invalid-argument' });
+    }
+    expect(await jobCount()).toBe(0);
+  });
+
+  it('checks the caller is an admin before it looks at a job id', async () => {
+    await call({ ...valid, jobId: 'calendarSend02' }, 'admin1');
+    // An existing job's id gets a non-admin nothing: no job summary, no new job.
+    await expect(call({ ...valid, jobId: 'calendarSend02' }, 'm-denny')).rejects.toMatchObject({ code: 'permission-denied' });
+    await expect(call({ ...valid, jobId: 'calendarSend03' })).rejects.toMatchObject({ code: 'unauthenticated' });
+    expect(await jobCount()).toBe(1);
+  });
 });
 
 describe('onEmailJobCreated', () => {

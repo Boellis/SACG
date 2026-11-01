@@ -1,4 +1,4 @@
-import { doc, onSnapshot, type Unsubscribe } from 'firebase/firestore';
+import { collection, doc, onSnapshot, type Unsubscribe } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { callFn } from '../../lib/callables';
 import type { Audience, EmailJob } from '../../lib/types';
@@ -12,6 +12,16 @@ export interface QueueMemberEmailInput {
   /** Send only to this one member (a test send); the audience is ignored. */
   testMemberId?: string;
   source?: 'calendar' | 'email-page';
+  /**
+   * Queue the job under this id (from newEmailJobId), once: a retry with the
+   * same id gets back the job an earlier attempt queued instead of a second one.
+   */
+  jobId?: string;
+}
+
+/** A new email job id, made on the device (a Firestore auto-id; no network). Use one per send attempt. */
+export function newEmailJobId(): string {
+  return doc(collection(db, 'emailJobs')).id;
 }
 
 export interface QueueMemberEmailResult {
