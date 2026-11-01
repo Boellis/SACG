@@ -4,6 +4,13 @@ import { HttpsError } from 'firebase-functions/v2/https';
 
 export type RsvpAnswer = 'yes' | 'maybe' | 'no';
 
+/**
+ * Most recipients one email job may have, so also the most ids a `members`
+ * audience may list. Bounded by the sender's trigger timeout: see the timing
+ * budget test in jobs.test.ts. (Defined here, not in jobs.ts, which imports this module.)
+ */
+export const MAX_RECIPIENTS = 100;
+
 /** A Firestore document id: non-empty, bounded, and no `/` (which would turn
  *  `doc(id)` into a different path and throw instead of a clean 4xx). */
 export const DocIdSchema = z.string().min(1).max(200).regex(/^[^/]+$/, 'invalid id');
@@ -15,7 +22,7 @@ export const DocIdSchema = z.string().min(1).max(200).regex(/^[^/]+$/, 'invalid 
 export const AudienceSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('all_active') }).strict(),
   z.object({ kind: z.literal('admins') }).strict(),
-  z.object({ kind: z.literal('members'), memberIds: z.array(DocIdSchema).min(1).max(150) }).strict(),
+  z.object({ kind: z.literal('members'), memberIds: z.array(DocIdSchema).min(1).max(MAX_RECIPIENTS) }).strict(),
   z
     .object({
       kind: z.literal('event_rsvp'),

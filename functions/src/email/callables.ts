@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { REGION } from '../config';
 import { requireAdmin } from '../lib/auth';
 import { AudienceSchema, DocIdSchema } from './audience';
-import { createEmailJob, processEmailJob, EMAIL_JOBS } from './jobs';
+import { createEmailJob, processEmailJob, EMAIL_JOBS, EMAIL_TRIGGER_TIMEOUT_S } from './jobs';
 
 const QueueMemberEmailInput = z
   .object({
@@ -38,8 +38,12 @@ export const queueMemberEmail = onCall({ region: REGION, timeoutSeconds: 60 }, a
   });
 });
 
-/** Delivers each new email job (idempotent; see processEmailJob). */
+/**
+ * Delivers each new email job (idempotent; see processEmailJob). Retried on
+ * failure: a run that dies or times out leaves its job leased, and a retry
+ * resumes it once the lease lapses. Until then a retry throws and backs off.
+ */
 export const onEmailJobCreated = onDocumentCreated(
-  { document: `${EMAIL_JOBS}/{jobId}`, region: REGION, timeoutSeconds: 540 },
+  { document: `${EMAIL_JOBS}/{jobId}`, region: REGION, timeoutSeconds: EMAIL_TRIGGER_TIMEOUT_S, retry: true },
   (event) => processEmailJob(getFirestore(), event.params.jobId),
 );
