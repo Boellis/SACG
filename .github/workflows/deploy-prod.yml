@@ -11,7 +11,15 @@ name: Deploy prod
 on:
   push:
     branches: [prod]
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      force:
+        description: >-
+          Pass --force to firebase deploy. Only for a deploy that stopped at a prompt CI cannot
+          answer (a function's new retry policy, or deleting a function removed from the source).
+          Read the failed run's log first.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -74,8 +82,13 @@ jobs:
           version=$(printf '%s' "$live" | node -p 'const r = JSON.parse(require("fs").readFileSync(0, "utf8")).release; (r && r.version && r.version.name) || ""')
           echo "prev_version=${version}" >> "$GITHUB_OUTPUT"
           echo "Live Hosting version before this deploy: ${version:-none}"
+      # Pushes never pass --force, so a deploy prompt (a function's new retry policy, deleting a
+      # function that is gone from the source, ...) fails the run instead of being accepted
+      # silently. To accept one deliberately, run this workflow by hand with "force" ticked.
       - name: Deploy
-        run: npx -y firebase-tools@14.9.0 deploy --only "hosting,firestore:rules,firestore:indexes,storage,functions" --project sacg-garden-app --non-interactive
+        env:
+          FORCE_FLAG: ${{ github.event_name == 'workflow_dispatch' && inputs.force && '--force' || '' }}
+        run: npx -y firebase-tools@14.9.0 deploy --only "hosting,firestore:rules,firestore:indexes,storage,functions" --project sacg-garden-app --non-interactive ${FORCE_FLAG}
       - name: Smoke checks against production
         run: node scripts/smoke/smoke.mjs --url https://sacg-garden-app.web.app --attempts 3
       # "<site>@<version>" is the only form firebase-tools 14.9.0 accepts for a version source;
@@ -84,8 +97,17 @@ jobs:
         if: (failure() || cancelled()) && steps.prev.outputs.prev_version != ''
         env:
           PREV_VERSION: ${{ steps.prev.outputs.prev_version }}
+          TOKEN: ${{ steps.auth.outputs.access_token }}
         run: |
           set -euo pipefail
+          # A run that failed before Hosting released (e.g. at a functions prompt) leaves the live
+          # version unchanged, and re-releasing the live version is rejected with HTTP 400.
+          live=$(curl -sS --fail --retry 3 --retry-delay 2 -H "Authorization: Bearer ${TOKEN}" "https://firebasehosting.googleapis.com/v1beta1/sites/sacg-garden-app/channels/live")
+          current=$(printf '%s' "$live" | node -p 'const r = JSON.parse(require("fs").readFileSync(0, "utf8")).release; (r && r.version && r.version.name) || ""')
+          if [ "$current" = "$PREV_VERSION" ]; then
+            echo "Live Hosting is still on ${PREV_VERSION##*/}: this run released nothing, so there is nothing to roll back."
+            exit 0
+          fi
           version_id="${PREV_VERSION##*/}"
-          echo "Rolling Hosting back to version ${version_id}"
+          echo "Rolling Hosting back from ${current##*/} to version ${version_id}"
           npx -y firebase-tools@14.9.0 hosting:clone "sacg-garden-app@${version_id}" sacg-garden-app:live --project sacg-garden-app --non-interactive

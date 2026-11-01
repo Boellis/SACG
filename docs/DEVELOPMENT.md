@@ -64,6 +64,7 @@ When production is broken and the normal flow is too slow:
 ## Rollback
 
 - **Hosting** rolls back automatically when a production deploy or its smoke checks fail, or the run is cancelled or times out partway: the previously live version is released again and the run ends failed (or cancelled). To roll back by hand: Firebase console → Hosting → release history → *Rollback*.
+- **A deploy that stops at a prompt.** firebase-tools asks before some changes, for example a function's new retry policy or deleting a function that is gone from the source. CI can't answer, so the run fails before anything is released, and the rollback step reports "nothing to roll back". Read the log. If the change is intended, open **Actions → Deploy prod → Run workflow** on `prod` and tick **force**, which passes `--force`. Pushes never pass it.
 - **Firestore rules and indexes, Storage rules, Functions** are *not* rolled back automatically. `git revert` the offending change on a branch and send it through the normal flow (as a hotfix if it is urgent).
 
 ## Never commit roster data or secrets
