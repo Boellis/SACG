@@ -8,6 +8,7 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./test/setup.ts'],
-    exclude: ['**/node_modules/**', '**/dist/**', 'test/rules/**'],
+    // functions/ has its own vitest config + emulator harness (`cd functions && npm test`).
+    exclude: ['**/node_modules/**', '**/dist/**', 'test/rules/**', 'functions/**'],
   },
 });
