@@ -9,6 +9,8 @@ setGlobalOptions({ region: 'us-central1' });
 
 // Member email service: admin-queued jobs, delivered by a Firestore trigger.
 export { queueMemberEmail, onEmailJobCreated } from './email/callables';
+// Public, token-gated RSVP links (no sign-in).
+export { rsvpGetInvite, rsvpSubmit } from './rsvp/callables';
 
 /**
  * Who gets waitlist / duplicate alerts. Add or change addresses here and
