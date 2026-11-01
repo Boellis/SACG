@@ -56,17 +56,28 @@ export async function deleteEvent(id: string): Promise<void> {
   await deleteDoc(doc(db, 'events', id));
 }
 
+/**
+ * Record the signed-in member's own RSVP (`source: 'app'`). Replaces the whole
+ * doc, so switching to 'no' drops a party size. `partySize` is kept for
+ * yes/maybe only; an empty note is left out. Rules validate the fields.
+ */
 export async function setRsvp(
   eventId: string,
   uid: string,
   status: RsvpStatus,
   displayName: string,
+  extra: { partySize?: number; note?: string } = {},
 ): Promise<void> {
-  await setDoc(doc(db, 'events', eventId, 'rsvps', uid), {
+  const data: Record<string, unknown> = {
     status,
     displayName,
     respondedAt: serverTimestamp(),
-  });
+    source: 'app',
+  };
+  if (status !== 'no' && extra.partySize !== undefined) data.partySize = extra.partySize;
+  const note = extra.note?.trim();
+  if (note) data.note = note;
+  await setDoc(doc(db, 'events', eventId, 'rsvps', uid), data);
 }
 
 export function listenRsvps(eventId: string, cb: (rsvps: Rsvp[]) => void): Unsubscribe {

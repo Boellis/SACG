@@ -70,6 +70,8 @@ npm run build      # type-check + production build
 
 ## Deploying to Firebase
 
+> **Day-to-day changes and deploys go through the `dev` → `test` → `prod` pipeline described in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)**: pull requests, automated checks, and automatic deploys from `prod`. The manual steps below are the one-time Firebase project setup.
+
 These steps need **your** Firebase account and project (interactive login / secrets that can't be automated):
 
 1. **Log in:** `firebase login`

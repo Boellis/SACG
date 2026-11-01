@@ -1,0 +1,91 @@
+# Pushing to `prod` deploys production: Hosting, Firestore rules and indexes, Storage rules and
+# Functions. If the deploy or the post-deploy smoke checks fail, or the run is cancelled or times
+# out partway, Hosting is rolled back to the version that was live before and the run ends
+# failed or cancelled. Rules and functions are NOT rolled back automatically: revert the PR
+# (docs/DEVELOPMENT.md). Credentials are keyless (Workload Identity Federation).
+#
+# The deploy target list is deliberate. Never add `extensions`: deploying it from CI would drop
+# the SMTP secret wiring of the Trigger Email extension.
+name: Deploy prod
+
+on:
+  push:
+    branches: [prod]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    name: deploy
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: production
+      url: https://sacg-garden-app.web.app
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            functions/package-lock.json
+      # Install and build before authenticating, so no install script runs with credentials on disk.
+      - name: Build the app
+        run: |
+          npm ci
+          npm run build
+      - name: Build the functions
+        working-directory: functions
+        run: |
+          npm ci
+          npm run build
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+          token_format: access_token
+      # Fails the run (before anything is deployed) if the live version cannot be read, because
+      # then there would be nothing to roll back to. A site with no release yet records "".
+      - name: Record the live Hosting version
+        id: prev
+        env:
+          TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: |
+          set -euo pipefail
+          live=$(curl -sS --fail --retry 3 --retry-delay 2 -H "Authorization: Bearer ${TOKEN}" "https://firebasehosting.googleapis.com/v1beta1/sites/sacg-garden-app/channels/live")
+          version=$(printf '%s' "$live" | node -p 'const r = JSON.parse(require("fs").readFileSync(0, "utf8")).release; (r && r.version && r.version.name) || ""')
+          echo "prev_version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Live Hosting version before this deploy: ${version:-none}"
+      - name: Deploy
+        run: npx -y firebase-tools@14.9.0 deploy --only "hosting,firestore:rules,firestore:indexes,storage,functions" --project sacg-garden-app --non-interactive
+      - name: Smoke checks against production
+        run: node scripts/smoke/smoke.mjs --url https://sacg-garden-app.web.app --attempts 3
+      # "<site>@<version>" is the only form firebase-tools 14.9.0 accepts for a version source;
+      # "<site>:@<version>" would be read as a channel named "@<version>".
+      - name: Roll Hosting back to the previous version
+        if: (failure() || cancelled()) && steps.prev.outputs.prev_version != ''
+        env:
+          PREV_VERSION: ${{ steps.prev.outputs.prev_version }}
+        run: |
+          set -euo pipefail
+          version_id="${PREV_VERSION##*/}"
+          echo "Rolling Hosting back to version ${version_id}"
+          npx -y firebase-tools@14.9.0 hosting:clone "sacg-garden-app@${version_id}" sacg-garden-app:live --project sacg-garden-app --non-interactive
