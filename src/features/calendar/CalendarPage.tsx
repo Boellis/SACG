@@ -9,9 +9,12 @@ import {
   listenRsvps,
 } from './eventsApi';
 import { listenMembers } from '../members/membersApi';
-import { buildGmailComposeUrl, buildMailtoUrl } from '../../lib/emailLinks';
+import { buildMailtoUrl } from '../../lib/emailLinks';
 import { activeMemberEmails, dedupeEmails } from '../../logic/emailAudience';
+import { rsvpHeadcount } from '../../logic/rsvp';
 import { Button, Card, Badge, Modal, Field } from '../../components/ui';
+import { buildEmailBody, typeLabel } from './eventText';
+import InviteComposer from './InviteComposer';
 import type { GardenEvent, Member, Rsvp, EventType, RsvpStatus } from '../../lib/types';
 
 // ---------------------------------------------------------------------------
@@ -30,12 +33,6 @@ function typeColor(type: EventType): EventColor {
   if (type === 'workday') return 'green';
   if (type === 'meeting') return 'blue';
   return 'gray';
-}
-
-function typeLabel(type: EventType): string {
-  if (type === 'workday') return 'Workday';
-  if (type === 'meeting') return 'Meeting';
-  return 'Other';
 }
 
 const DOT_CLASSES: Record<EventColor, string> = {
@@ -98,56 +95,63 @@ interface EventModalProps {
   onClose: () => void;
   onEdit: (ev: GardenEvent) => void;
   isAdmin: boolean;
-  memberId: string;
-  memberDisplayName: string;
+  me: Member;
   members: Member[];
 }
 
-function buildEmailBody(event: GardenEvent): string {
-  const start = event.start.toDate();
-  const end = event.end.toDate();
-  const label = typeLabel(event.type);
+const RSVP_STATUSES: RsvpStatus[] = ['yes', 'maybe', 'no'];
+const STATUS_LABEL: Record<RsvpStatus, string> = { yes: 'Yes', maybe: 'Maybe', no: 'No' };
+const MAX_PARTY_SIZE = 20;
 
-  let datePart: string;
-  if (event.allDay) {
-    datePart = start.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
-  } else {
-    const startStr = start.toLocaleString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
-    const endStr = end.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-    datePart = `${startStr}–${endStr}`;
-  }
+const clampPartySize = (raw: string) => Math.min(MAX_PARTY_SIZE, Math.max(1, Math.round(Number(raw)) || 1));
 
-  const lines: string[] = [];
-  lines.push(`${label} — ${datePart}`);
-  if (event.location) lines.push(`Location: ${event.location}`);
-  lines.push('');
-  if (event.description) {
-    lines.push(event.description);
-    lines.push('');
-  }
-  lines.push('See the SACG calendar: https://sacg-garden-app.web.app/calendar');
-  return lines.join('\n');
+/** "Name (×2) — "note"" for the admin's per-person RSVP list. */
+function personLine(r: Rsvp): string {
+  const size = r.status !== 'no' && (r.partySize ?? 1) > 1 ? ` (×${r.partySize})` : '';
+  const note = r.note ? ` — "${r.note}"` : '';
+  return `${r.displayName}${size}${note}`;
 }
 
-function EventModal({ event, onClose, onEdit, isAdmin, memberId, memberDisplayName, members }: EventModalProps) {
+function EventModal({ event, onClose, onEdit, isAdmin, me, members }: EventModalProps) {
   const [rsvps, setRsvps] = useState<Rsvp[]>([]);
   const [saving, setSaving] = useState(false);
+  const [rsvpError, setRsvpError] = useState('');
+  // My RSVP as shown in the form: mirrors my saved answer until I change it.
+  const [choice, setChoice] = useState<RsvpStatus | null>(null);
+  const [partySize, setPartySize] = useState('1');
+  const [note, setNote] = useState('');
+  const [touched, setTouched] = useState(false);
+  const [composing, setComposing] = useState(false);
 
   useEffect(() => {
     const unsub = listenRsvps(event.id, setRsvps);
     return unsub;
   }, [event.id]);
 
-  const myRsvp = rsvps.find((r) => r.id === memberId);
+  const myRsvp = rsvps.find((r) => r.id === me.id);
 
-  const yes = rsvps.filter((r) => r.status === 'yes');
-  const no = rsvps.filter((r) => r.status === 'no');
-  const maybe = rsvps.filter((r) => r.status === 'maybe');
+  useEffect(() => {
+    if (touched || !myRsvp) return;
+    setChoice(myRsvp.status);
+    setPartySize(String(myRsvp.partySize ?? 1));
+    setNote(myRsvp.note ?? '');
+  }, [myRsvp, touched]);
 
-  async function handleRsvp(status: RsvpStatus) {
+  const hc = rsvpHeadcount(rsvps);
+  const answered = new Set(rsvps.map((r) => r.id));
+  const notYet = members.filter((m) => m.status === 'active' && !answered.has(m.id)).length;
+
+  async function saveRsvp(status: RsvpStatus) {
+    const size = clampPartySize(partySize);
+    setTouched(true);
+    setChoice(status);
+    setPartySize(String(size));
     setSaving(true);
+    setRsvpError('');
     try {
-      await setRsvp(event.id, memberId, status, memberDisplayName);
+      await setRsvp(event.id, me.id, status, me.displayName, status === 'no' ? { note } : { partySize: size, note });
+    } catch {
+      setRsvpError("Couldn't save your RSVP. Please try again.");
     } finally {
       setSaving(false);
     }
@@ -159,30 +163,16 @@ function EventModal({ event, onClose, onEdit, isAdmin, memberId, memberDisplayNa
     onClose();
   }
 
-  const rsvpBtn = (status: RsvpStatus, label: string) => {
-    const active = myRsvp?.status === status;
-    return (
-      <Button
-        key={status}
-        variant={active ? 'primary' : 'secondary'}
-        disabled={saving}
-        onClick={() => handleRsvp(status)}
-        className="flex-1"
-      >
-        {label}
-      </Button>
-    );
-  };
-
   const recipientEmails = dedupeEmails(activeMemberEmails(members));
-  const emailSubject = event.title;
-  const emailBody = buildEmailBody(event);
-  const gmailUrl = buildGmailComposeUrl(recipientEmails, emailSubject, emailBody);
-  const mailtoUrl = buildMailtoUrl(recipientEmails, emailSubject, emailBody);
+  const mailtoUrl = buildMailtoUrl(recipientEmails, event.title, buildEmailBody(event));
+
+  if (composing) {
+    return <InviteComposer event={event} members={members} me={me} onClose={() => setComposing(false)} />;
+  }
 
   return (
     <Modal open onClose={onClose} title={event.title}>
-      <div className="space-y-3 text-sm">
+      <div className="space-y-3 text-sm max-h-[80vh] overflow-y-auto">
         <div className="flex items-center gap-2">
           <Badge color={typeColor(event.type)}>{typeLabel(event.type)}</Badge>
           <span className="text-gray-600">{formatDateTime(event)}</span>
@@ -190,60 +180,123 @@ function EventModal({ event, onClose, onEdit, isAdmin, memberId, memberDisplayNa
         {event.location && <p className="text-gray-700"><span className="font-medium">Location:</span> {event.location}</p>}
         {event.description && <p className="text-gray-600">{event.description}</p>}
 
-        {/* RSVP controls */}
+        {/* RSVP controls: a status click saves right away; size/note via Save RSVP */}
         <div>
           <p className="font-medium text-gray-700 mb-1">RSVP</p>
           <div className="flex gap-2">
-            {rsvpBtn('yes', 'Yes')}
-            {rsvpBtn('maybe', 'Maybe')}
-            {rsvpBtn('no', 'No')}
+            {RSVP_STATUSES.map((s) => (
+              <Button
+                key={s}
+                variant={choice === s ? 'primary' : 'secondary'}
+                aria-pressed={choice === s}
+                disabled={saving}
+                onClick={() => saveRsvp(s)}
+                className="flex-1"
+              >
+                {STATUS_LABEL[s]}
+              </Button>
+            ))}
           </div>
+          {choice && (
+            <div className="mt-3 space-y-2">
+              {choice !== 'no' && (
+                <div className="flex items-center gap-2">
+                  <label htmlFor="rsvp-party-size" className="text-gray-700">
+                    How many people, including you?
+                  </label>
+                  <input
+                    id="rsvp-party-size"
+                    type="number"
+                    min={1}
+                    max={MAX_PARTY_SIZE}
+                    value={partySize}
+                    onChange={(e) => {
+                      setTouched(true);
+                      setPartySize(e.target.value);
+                    }}
+                    className="w-16 border border-gray-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-2 focus:ring-garden-500"
+                  />
+                </div>
+              )}
+              <div className="flex flex-col gap-1">
+                <label htmlFor="rsvp-note" className="text-gray-700">
+                  Note for organizers (optional)
+                </label>
+                <textarea
+                  id="rsvp-note"
+                  rows={2}
+                  maxLength={500}
+                  value={note}
+                  onChange={(e) => {
+                    setTouched(true);
+                    setNote(e.target.value);
+                  }}
+                  placeholder="e.g. bringing a vegetarian dish"
+                  className="border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-garden-500"
+                />
+              </div>
+              <Button variant="secondary" disabled={saving} onClick={() => saveRsvp(choice)}>
+                {saving ? 'Saving…' : 'Save RSVP'}
+              </Button>
+              {rsvpError && <p className="text-xs text-red-600">{rsvpError}</p>}
+            </div>
+          )}
         </div>
 
-        {/* RSVP counts */}
-        <div className="flex gap-4 text-gray-600">
-          <span><span className="font-medium text-green-700">{yes.length}</span> yes</span>
-          <span><span className="font-medium text-amber-700">{maybe.length}</span> maybe</span>
-          <span><span className="font-medium text-red-700">{no.length}</span> no</span>
-        </div>
+        {/* RSVP counts (members); admins get the full breakdown below */}
+        {!isAdmin && (
+          <div className="flex gap-4 text-gray-600">
+            <span><span className="font-medium text-green-700">{hc.yes}</span> yes</span>
+            <span><span className="font-medium text-amber-700">{hc.maybe}</span> maybe</span>
+            <span><span className="font-medium text-red-700">{hc.no}</span> no</span>
+          </div>
+        )}
 
-        {/* Admin attendee list */}
-        {isAdmin && rsvps.length > 0 && (
-          <div className="border-t border-gray-100 pt-2 space-y-1">
-            {(['yes', 'maybe', 'no'] as RsvpStatus[]).map((s) => {
-              const group = rsvps.filter((r) => r.status === s);
+        {/* Admin: headcount + who's coming */}
+        {isAdmin && (
+          <div className="border-t border-gray-100 pt-2 space-y-2">
+            <p className="font-medium text-gray-800">
+              <span>Expected headcount: {hc.people} {hc.people === 1 ? 'person' : 'people'}</span>
+              {hc.maybePeople > 0 && <span className="font-normal text-gray-500"> (+{hc.maybePeople} maybe)</span>}
+            </p>
+            <p className="text-gray-600">
+              {hc.yes} yes · {hc.maybe} maybe · {hc.no} no · {notYet} not yet
+            </p>
+            {RSVP_STATUSES.map((s) => {
+              const group = rsvps
+                .filter((r) => r.status === s)
+                .sort((a, b) => a.displayName.localeCompare(b.displayName));
               if (!group.length) return null;
               return (
                 <div key={s}>
-                  <span className="font-medium capitalize">{s}: </span>
-                  <span className="text-gray-600">{group.map((r) => r.displayName).join(', ')}</span>
+                  <p className="font-medium text-gray-700">{STATUS_LABEL[s]}</p>
+                  <ul className="ml-3 space-y-0.5">
+                    {group.map((r) => (
+                      <li key={r.id} className="flex items-center gap-2 text-gray-600">
+                        <span>{personLine(r)}</span>
+                        {r.source === 'email' && <Badge color="blue">email</Badge>}
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               );
             })}
           </div>
         )}
 
-        {/* Admin: email all members */}
+        {/* Admin: personalized RSVP emails (server-sent), with a BCC fallback */}
         {isAdmin && (
           <div className="border-t border-gray-100 pt-3 space-y-1">
-            <Button
-              variant="secondary"
-              disabled={recipientEmails.length === 0}
-              onClick={() => window.open(gmailUrl, '_blank')}
-              className="w-full"
-            >
-              Email all members about this event
+            <Button variant="secondary" onClick={() => setComposing(true)} className="w-full">
+              Send RSVP invitations…
             </Button>
             {recipientEmails.length > 0 && (
               <p className="text-xs text-gray-500 text-center">
-                Opens your email composer; members are BCC'd.{' '}
+                Each member gets their own email with a one-click RSVP link.{' '}
                 <a href={mailtoUrl} className="underline text-garden-700 hover:text-garden-900" target="_blank" rel="noreferrer">
                   Use mail app instead
                 </a>
               </p>
-            )}
-            {recipientEmails.length === 0 && (
-              <p className="text-xs text-gray-400 text-center">No active members to email.</p>
             )}
           </div>
         )}
@@ -599,8 +652,7 @@ export default function CalendarPage() {
           onClose={() => setSelectedEvent(null)}
           onEdit={(ev) => { setSelectedEvent(null); setEditingEvent(ev); }}
           isAdmin={isAdmin}
-          memberId={member.id}
-          memberDisplayName={member.displayName}
+          me={member}
           members={members}
         />
       )}
