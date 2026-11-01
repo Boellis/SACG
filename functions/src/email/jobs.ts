@@ -1,4 +1,4 @@
-import { FieldValue, Timestamp, type Firestore } from 'firebase-admin/firestore';
+import { FieldValue, Timestamp, type DocumentSnapshot, type Firestore } from 'firebase-admin/firestore';
 import { HttpsError } from 'firebase-functions/v2/https';
 import { logger } from 'firebase-functions/v2';
 import { AudienceSchema, DocIdSchema, MAX_RECIPIENTS, resolveAudience, type Audience, type Recipient } from './audience';
@@ -31,6 +31,12 @@ export interface CreateEmailJobInput {
   createdBy: string;
   createdByName: string;
   assistantRef?: { threadId: string; actionId: string };
+  /**
+   * Queue under this id instead of a random one, making the call idempotent:
+   * if a job with this id exists (an earlier attempt queued it, even one that
+   * reported a failure), that job is returned and nothing new is queued.
+   */
+  jobId?: string;
 }
 
 /** Shape of an `emailJobs/{jobId}` doc (spec §4). Admin-readable, server-written. */
@@ -58,15 +64,31 @@ export interface EmailJobDoc {
 
 const invalid = (message: string) => new HttpsError('invalid-argument', message);
 
+const summaryOf = (job: DocumentSnapshot) => ({
+  jobId: job.id,
+  total: Number(job.get('total') ?? 0),
+  skipped: Number(job.get('skippedNoEmail') ?? 0),
+});
+
 /**
  * Validate a send, resolve its audience server-side and queue an `emailJobs`
  * doc (status 'queued'); `onEmailJobCreated` then delivers it. With
  * `testMemberId` the audience becomes exactly that one member (`test: true`).
+ * With `jobId` the job is created under that id, once: a repeat call returns
+ * the existing job without re-checking anything (it may already be sending).
  */
 export async function createEmailJob(
   db: Firestore,
   input: CreateEmailJobInput,
 ): Promise<{ jobId: string; total: number; skipped: number }> {
+  const fixedId = input.jobId !== undefined;
+  if (fixedId && !DocIdSchema.safeParse(input.jobId).success) throw invalid("That email job id isn't valid.");
+  const ref = fixedId ? db.collection(EMAIL_JOBS).doc(input.jobId!) : db.collection(EMAIL_JOBS).doc();
+  if (fixedId) {
+    const existing = await ref.get();
+    if (existing.exists) return summaryOf(existing);
+  }
+
   const subject = String(input.subject ?? '').trim();
   const body = String(input.body ?? '');
   if (!subject) throw invalid('Add a subject.');
@@ -104,24 +126,30 @@ export async function createEmailJob(
     throw invalid(`That's ${recipients.length} recipients; the limit is ${MAX_RECIPIENTS} per email.`);
   }
 
-  const ref = db.collection(EMAIL_JOBS).doc();
-  await ref.set({
-    subject,
-    body,
-    ...(input.rsvpEventId ? { rsvpEventId: input.rsvpEventId } : {}),
-    recipients,
-    total: recipients.length,
-    sent: 0,
-    failed: 0,
-    skippedNoEmail,
-    status: 'queued',
-    test: input.testMemberId !== undefined,
-    source: input.source,
-    createdBy: input.createdBy,
-    createdByName: input.createdByName,
-    createdAt: FieldValue.serverTimestamp(),
-    ...(input.assistantRef ? { assistantRef: input.assistantRef } : {}),
-  });
+  try {
+    // create(), never set(): a job id is queued at most once.
+    await ref.create({
+      subject,
+      body,
+      ...(input.rsvpEventId ? { rsvpEventId: input.rsvpEventId } : {}),
+      recipients,
+      total: recipients.length,
+      sent: 0,
+      failed: 0,
+      skippedNoEmail,
+      status: 'queued',
+      test: input.testMemberId !== undefined,
+      source: input.source,
+      createdBy: input.createdBy,
+      createdByName: input.createdByName,
+      createdAt: FieldValue.serverTimestamp(),
+      ...(input.assistantRef ? { assistantRef: input.assistantRef } : {}),
+    });
+  } catch (err) {
+    // A concurrent call with the same fixed id got there first: its job stands.
+    if (fixedId && isAlreadyExists(err)) return summaryOf(await ref.get());
+    throw err;
+  }
   return { jobId: ref.id, total: recipients.length, skipped: skippedNoEmail };
 }
 
