@@ -1,5 +1,6 @@
 node_modules/
-lib/
+# Anchored: only the tsc output dir, not src/lib/ (source modules live there).
+/lib/
 *.local
 firebase-debug.log
 firebase-debug.*.log

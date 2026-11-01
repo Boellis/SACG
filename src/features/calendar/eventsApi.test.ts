@@ -120,6 +120,33 @@ describe('eventsApi', () => {
       expect(data.status).toBe('maybe');
       expect(data.displayName).toBe('Bob Jones');
     });
+
+    it("writes source 'app' with the party size and a trimmed note", async () => {
+      const fakeTs = { _type: 'serverTimestamp' };
+      mockedServerTimestamp.mockReturnValue(fakeTs as unknown as ReturnType<typeof firestoreMod.serverTimestamp>);
+
+      await setRsvp('event-1', 'member-uid', 'yes', 'Denny Smith', { partySize: 3, note: '  veggie  ' });
+
+      const [ref, data] = mockedSetDoc.mock.calls[0] as unknown as [Record<string, unknown>, Record<string, unknown>];
+      expect(ref._path).toBe('events/event-1/rsvps/member-uid');
+      expect(data).toEqual({
+        status: 'yes',
+        displayName: 'Denny Smith',
+        respondedAt: fakeTs,
+        source: 'app',
+        partySize: 3,
+        note: 'veggie',
+      });
+    });
+
+    it('omits the party size for a no and drops an empty note', async () => {
+      await setRsvp('event-1', 'member-uid', 'no', 'Denny Smith', { partySize: 3, note: '   ' });
+
+      const [_ref, data] = mockedSetDoc.mock.calls[0] as unknown as [unknown, Record<string, unknown>];
+      expect(data).not.toHaveProperty('partySize');
+      expect(data).not.toHaveProperty('note');
+      expect(data.source).toBe('app');
+    });
   });
 
   describe('deleteEvent', () => {

@@ -85,7 +85,47 @@ export interface GardenEvent {
   createdBy: string;
 }
 
-export interface Rsvp { id: string; status: RsvpStatus; displayName: string; respondedAt: Timestamp; }
+export type RsvpSource = 'app' | 'email';
+export interface Rsvp {
+  id: string;            // = member id
+  status: RsvpStatus;
+  displayName: string;
+  respondedAt: Timestamp;
+  partySize?: number;    // 1..20 incl. the responder; yes/maybe only
+  note?: string;         // ≤ 500 chars, for the organizers
+  source?: RsvpSource;   // 'email' = answered from an RSVP email link
+}
+
+// Who a server-sent member email goes to (mirrors functions/src/email/audience.ts).
+// There is deliberately no raw-address kind: the server resolves members itself.
+export type Audience =
+  | { kind: 'all_active' }
+  | { kind: 'admins' }
+  | { kind: 'members'; memberIds: string[] }
+  | { kind: 'event_rsvp'; eventId: string; statuses: Array<RsvpStatus | 'none'> };
+
+// An `emailJobs` doc: a queued bulk send the server delivers one email at a time.
+export type EmailJobStatus = 'queued' | 'sending' | 'done' | 'failed';
+export interface EmailJob {
+  id: string;
+  subject: string;
+  body: string;
+  rsvpEventId?: string;
+  recipients: Array<{ memberId: string; displayName: string; email: string }>;
+  total: number;
+  sent: number;
+  failed: number;
+  skippedNoEmail: number;
+  status: EmailJobStatus;
+  test: boolean;
+  source: 'assistant' | 'calendar' | 'email-page';
+  createdBy: string;
+  createdByName: string;
+  createdAt?: Timestamp;
+  finishedAt?: Timestamp;
+  error?: string;
+  assistantRef?: { threadId: string; actionId: string };
+}
 
 export interface VolunteerHour {
   id: string;
