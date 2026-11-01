@@ -64,12 +64,61 @@ export function chunkUrls(jsBody, base) {
   return urls;
 }
 
+// Anonymous reads of Firestore and Storage must be refused BY THE SECURITY RULES.
+//
+// Google answers 403 PERMISSION_DENIED for two very different reasons. Either the rules said no,
+// or something in front of them did (an API key limited to other referrers or APIs, a disabled
+// service, a rejected credential) and the rules never ran. Only the first says anything about
+// firestore.rules and storage.rules, so that status alone must never count as a pass. What
+// tells the two apart:
+//   - a rules denial is a bare error with the rules' fixed wording and no `details`;
+//   - a refusal from in front of the rules carries an ErrorInfo in error.details[] with a
+//     machine-readable `reason` (API_KEY_HTTP_REFERRER_BLOCKED, API_KEY_SERVICE_BLOCKED,
+//     SERVICE_DISABLED, CREDENTIALS_MISSING, ...).
+
+/** The rules' own wording: Cloud Firestore first, then Cloud Storage for Firebase. */
+const RULES_DENIAL_MESSAGES = ['Missing or insufficient permissions.', 'Permission denied.'];
+
+/** The `error` object of a Google JSON error body, or null when the body is anything else. */
+function errorObject(body) {
+  try {
+    const error = JSON.parse(body)?.error;
+    return error && typeof error === 'object' && !Array.isArray(error) ? error : null;
+  } catch {
+    return null;
+  }
+}
+
+const reasonsOf = (error) =>
+  Array.isArray(error?.details)
+    ? error.details.map((detail) => detail?.reason).filter((reason) => typeof reason === 'string' && reason !== '')
+    : [];
+
+/** ErrorInfo reasons of a Google error body ("API_KEY_HTTP_REFERRER_BLOCKED", ...); [] when there are none. */
+export const errorReasons = (body) => reasonsOf(errorObject(body));
+
 /**
- * Did an anonymous read get refused? Firestore says 403 + "PERMISSION_DENIED"; Storage
- * says 403 + "Permission denied."; either way a 401 is a refusal too.
+ * Did the security rules refuse an anonymous read? Only a 403 with the rules' wording and no
+ * ErrorInfo reason counts. A 401 does not: that is authentication failing before the rules
+ * are consulted.
  */
-export const expectDenied = (status, body) =>
-  status === 401 || (status === 403 && /permission[_ ]denied/i.test(body));
+export function expectDenied(status, body) {
+  if (status !== 403) return false;
+  const error = errorObject(body);
+  if (!error || reasonsOf(error).length > 0) return false;
+  return RULES_DENIAL_MESSAGES.includes(error.message);
+}
+
+/** The table row for an anonymous Firestore/Storage list call: did the security rules refuse it? */
+export function anonymousListResult(status, body) {
+  if (expectDenied(status, body)) return { ok: true, detail: `HTTP ${status} denied by security rules` };
+  const reasons = errorReasons(body);
+  if (reasons.length > 0) {
+    return { ok: false, detail: `HTTP ${status} ${reasons.join(', ')}: refused before the security rules ran, so they were not tested` };
+  }
+  if (status >= 200 && status < 300) return { ok: false, detail: `HTTP ${status}: anonymous list was not refused` };
+  return { ok: false, detail: `HTTP ${status}: not a security-rules denial` };
+}
 
 /** `error.status` of a Firebase callable error body ("NOT_FOUND", ...), or '' if there is none. */
 export function callableErrorStatus(body) {

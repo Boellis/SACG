@@ -13,6 +13,8 @@ import {
   assetUrls,
   chunkUrls,
   expectDenied,
+  errorReasons,
+  anonymousListResult,
   callableRejectsAnon,
   callableErrorStatus,
   isSourceMap,
@@ -119,22 +121,149 @@ describe('chunkUrls', () => {
   });
 });
 
+// What Google really answers to an anonymous list call. The two security-rules denials were
+// recorded from the live project (2026-11-01), and so was the shape of the 401. The refusals from
+// in front of the rules follow Google's documented ErrorInfo shape, with a made-up project number.
+const errorInfo = (reason, service = 'firestore.googleapis.com') => ({
+  '@type': 'type.googleapis.com/google.rpc.ErrorInfo',
+  reason,
+  domain: 'googleapis.com',
+  metadata: { service, consumer: 'projects/000000000000' },
+});
+const googleError = (error) => JSON.stringify({ error });
+
+// The security rules said no:
+const FIRESTORE_RULES_DENIAL = { code: 403, message: 'Missing or insufficient permissions.', status: 'PERMISSION_DENIED' };
+const STORAGE_RULES_DENIAL = { code: 403, message: 'Permission denied.' };
+// Something in front of the rules said no, so the rules never ran. Google also calls these 403
+// PERMISSION_DENIED, which is why that status alone proves nothing:
+const REFERRER_BLOCKED = {
+  code: 403,
+  message: 'Requests from referer <empty> are blocked.',
+  status: 'PERMISSION_DENIED',
+  details: [errorInfo('API_KEY_HTTP_REFERRER_BLOCKED')],
+};
+const API_KEY_SERVICE_BLOCKED = {
+  code: 403,
+  message: 'Requests to this API firestore.googleapis.com method google.firestore.v1.Firestore.GetOrListDocuments are blocked.',
+  status: 'PERMISSION_DENIED',
+  details: [errorInfo('API_KEY_SERVICE_BLOCKED')],
+};
+const FIRESTORE_DISABLED = {
+  code: 403,
+  message: 'Cloud Firestore API has not been used in project 000000000000 before or it is disabled.',
+  status: 'PERMISSION_DENIED',
+  details: [{ '@type': 'type.googleapis.com/google.rpc.Help', links: [] }, errorInfo('SERVICE_DISABLED')], // the ErrorInfo is not always first
+};
+const STORAGE_DISABLED = {
+  code: 403,
+  message: 'Firebase Storage API has not been used in project 000000000000 before or it is disabled.',
+  status: 'PERMISSION_DENIED',
+  details: [errorInfo('SERVICE_DISABLED', 'firebasestorage.googleapis.com')],
+};
+const CREDENTIALS_MISSING = {
+  code: 401,
+  message: 'Request had invalid authentication credentials.',
+  status: 'UNAUTHENTICATED',
+  details: [errorInfo('CREDENTIALS_MISSING')],
+};
+// [label, HTTP status, error, ErrorInfo reason]
+const NOT_BY_THE_RULES = [
+  ['a referrer-restricted key', 403, REFERRER_BLOCKED, 'API_KEY_HTTP_REFERRER_BLOCKED'],
+  ['an API-restricted key', 403, API_KEY_SERVICE_BLOCKED, 'API_KEY_SERVICE_BLOCKED'],
+  ['a disabled Firestore API, whose ErrorInfo is not the first detail', 403, FIRESTORE_DISABLED, 'SERVICE_DISABLED'],
+  ['a disabled Storage API', 403, STORAGE_DISABLED, 'SERVICE_DISABLED'],
+  ['a rejected credential', 401, CREDENTIALS_MISSING, 'CREDENTIALS_MISSING'],
+];
+
 describe('expectDenied', () => {
-  it('accepts a Firestore permission-denied response', () => {
-    expect(expectDenied(403, '{"error":{"status":"PERMISSION_DENIED"}}')).toBe(true);
+  // Google answers 403 PERMISSION_DENIED for two very different reasons: the security rules said
+  // no, or the API key or service refused the request before the rules were consulted. Only the
+  // first says anything about firestore.rules and storage.rules.
+  it("accepts Firestore's security-rules denial", () => {
+    expect(expectDenied(403, googleError(FIRESTORE_RULES_DENIAL))).toBe(true);
   });
-  it('accepts a Storage denial, which words it differently', () => {
-    expect(expectDenied(403, '{"error":{"code":403,"message":"Permission denied."}}')).toBe(true);
+  it("accepts Storage's security-rules denial, which is worded differently and carries no status", () => {
+    expect(expectDenied(403, googleError(STORAGE_RULES_DENIAL))).toBe(true);
   });
-  it('accepts 401', () => {
-    expect(expectDenied(401, '')).toBe(true);
+
+  it.each(NOT_BY_THE_RULES)('rejects a refusal by %s: the rules never ran', (_label, status, error) => {
+    expect(expectDenied(status, googleError(error))).toBe(false);
+  });
+  it('rejects a bare ErrorInfo refusal', () => {
+    const error = { code: 403, status: 'PERMISSION_DENIED', details: [{ '@type': 'type.googleapis.com/google.rpc.ErrorInfo', reason: 'API_KEY_HTTP_REFERRER_BLOCKED' }] };
+    expect(expectDenied(403, googleError(error))).toBe(false);
+  });
+  it('rejects any error that carries a reason, whatever its message says', () => {
+    expect(expectDenied(403, googleError({ ...FIRESTORE_RULES_DENIAL, details: [errorInfo('API_KEY_HTTP_REFERRER_BLOCKED')] }))).toBe(false);
+    expect(expectDenied(403, googleError({ ...STORAGE_RULES_DENIAL, details: [errorInfo('SERVICE_DISABLED')] }))).toBe(false);
+  });
+  it('rejects a 403 that does not carry the security-rules wording', () => {
+    expect(expectDenied(403, '{"error":{"status":"PERMISSION_DENIED"}}')).toBe(false); // the status alone says nothing about who refused
+    expect(expectDenied(403, googleError({ code: 403, message: 'Requests from referer <empty> are blocked.', status: 'PERMISSION_DENIED' }))).toBe(false);
+    expect(expectDenied(403, '<html>Forbidden</html>')).toBe(false);
+    expect(expectDenied(403, 'Permission denied.')).toBe(false); // the right words, but not a Google error body
+    expect(expectDenied(403, 'PERMISSION_DENIED')).toBe(false);
+    expect(expectDenied(403, '')).toBe(false);
+  });
+  it('rejects a 401: the authentication layer answers before the security rules are consulted', () => {
+    expect(expectDenied(401, '')).toBe(false);
+    expect(expectDenied(401, googleError({ ...FIRESTORE_RULES_DENIAL, code: 401 }))).toBe(false);
   });
   it('rejects successful reads and unrelated errors', () => {
     expect(expectDenied(200, '{"documents":[]}')).toBe(false);
     expect(expectDenied(200, '{"documents":[{"name":"x"}]}')).toBe(false);
-    expect(expectDenied(403, '<html>Forbidden</html>')).toBe(false);
+    expect(expectDenied(200, googleError(FIRESTORE_RULES_DENIAL))).toBe(false); // the right words, but the wrong status
     expect(expectDenied(404, '{"error":{"status":"NOT_FOUND"}}')).toBe(false);
+    expect(expectDenied(500, googleError(FIRESTORE_RULES_DENIAL))).toBe(false);
     expect(expectDenied(500, 'PERMISSION_DENIED')).toBe(false);
+  });
+  it('does not throw on a body of an unexpected shape', () => {
+    for (const body of ['null', '[]', '"x"', '{}', '{"error":null}', '{"error":"Permission denied."}', '{"error":{"message":42}}']) {
+      expect(expectDenied(403, body)).toBe(false);
+    }
+    // junk among the details is ignored: only a reason counts against a denial
+    expect(expectDenied(403, '{"error":{"message":"Permission denied.","details":[null,1,"x",{}]}}')).toBe(true);
+  });
+});
+
+describe('errorReasons', () => {
+  it.each(NOT_BY_THE_RULES)('finds the ErrorInfo reason of %s', (_label, _status, error, reason) => {
+    expect(errorReasons(googleError(error))).toEqual([reason]);
+  });
+  it('finds nothing in a rules denial, or in anything that is not a Google error body', () => {
+    const bodies = [
+      googleError(FIRESTORE_RULES_DENIAL),
+      googleError(STORAGE_RULES_DENIAL),
+      '',
+      'oops',
+      'null',
+      '{"documents":[]}',
+      '{"error":{"details":"x"}}',
+      '{"error":{"details":[null,1,{"reason":""},{"reason":7}]}}',
+    ];
+    for (const body of bodies) expect(errorReasons(body)).toEqual([]);
+  });
+});
+
+describe('anonymousListResult', () => {
+  it('passes a security-rules denial, and says that is what it was', () => {
+    expect(anonymousListResult(403, googleError(FIRESTORE_RULES_DENIAL))).toEqual({ ok: true, detail: 'HTTP 403 denied by security rules' });
+    expect(anonymousListResult(403, googleError(STORAGE_RULES_DENIAL))).toEqual({ ok: true, detail: 'HTTP 403 denied by security rules' });
+  });
+  it.each(NOT_BY_THE_RULES)('fails a refusal by %s, naming the reason and saying the rules were not tested', (_label, status, error, reason) => {
+    const { ok, detail } = anonymousListResult(status, googleError(error));
+    expect(ok).toBe(false);
+    expect(detail).toContain(`HTTP ${status} ${reason}`);
+    expect(detail).toContain('refused before the security rules ran');
+  });
+  it('fails a list that went through', () => {
+    expect(anonymousListResult(200, '{"documents":[]}')).toEqual({ ok: false, detail: 'HTTP 200: anonymous list was not refused' });
+  });
+  it('fails any other answer', () => {
+    expect(anonymousListResult(404, '{"error":{"status":"NOT_FOUND"}}')).toEqual({ ok: false, detail: 'HTTP 404: not a security-rules denial' });
+    expect(anonymousListResult(403, '<html>Forbidden</html>')).toEqual({ ok: false, detail: 'HTTP 403: not a security-rules denial' });
+    expect(anonymousListResult(403, '{"error":{"status":"PERMISSION_DENIED"}}')).toEqual({ ok: false, detail: 'HTTP 403: not a security-rules denial' });
   });
 });
 
@@ -279,6 +408,13 @@ describe('runSmoke: a healthy site', () => {
     expect(FIRESTORE_COLLECTIONS).toHaveLength(16);
   });
 
+  it('reports a Firestore or Storage denial as the security rules', async () => {
+    const { fetchImpl } = fakeFetch();
+    const rows = await smoke(fetchImpl, { skipFunctions: true });
+    expect(row(rows, 'Firestore list members is denied').detail).toBe('HTTP 403 denied by security rules');
+    expect(row(rows, 'Storage list documents/ is denied').detail).toBe('HTTP 403 denied by security rules');
+  });
+
   it('skips only the callable checks with skipFunctions', async () => {
     const { fetchImpl, requests } = fakeFetch();
     const rows = await smoke(fetchImpl, { skipFunctions: true });
@@ -319,6 +455,22 @@ describe('runSmoke: read-only and credential-free', () => {
     expect(requests.map((r) => r.url)).toContain(
       'https://firebasestorage.googleapis.com/v0/b/sacg-garden-app.firebasestorage.app/o?prefix=documents%2F&maxResults=1',
     );
+  });
+
+  it('sends the site origin as the Referer on every Firestore and Storage probe, as a visitor on the site would', async () => {
+    const { fetchImpl, requests } = fakeFetch();
+    await smoke(fetchImpl, { skipFunctions: true });
+    const probes = requests.filter((r) => ['firestore.googleapis.com', 'firebasestorage.googleapis.com'].includes(new URL(r.url).hostname));
+    expect(probes).toHaveLength(FIRESTORE_COLLECTIONS.length + 1);
+    for (const probe of probes) expect(new Headers(probe.headers).get('referer')).toBe(`${BASE}/`);
+  });
+
+  it('sends the bare origin as the Referer however the base URL was written', async () => {
+    const { fetchImpl, requests } = fakeFetch();
+    await smoke(fetchImpl, { skipFunctions: true, baseUrl: `${BASE}///` });
+    const probes = requests.filter((r) => new URL(r.url).hostname.endsWith('.googleapis.com'));
+    expect(probes).toHaveLength(FIRESTORE_COLLECTIONS.length + 1);
+    for (const probe of probes) expect(new Headers(probe.headers).get('referer')).toBe(`${BASE}/`);
   });
 
   it('probes the callables with the Firebase callable protocol, anonymously', async () => {
@@ -372,6 +524,51 @@ describe('runSmoke: it catches what it exists to catch', () => {
   it('fails when anonymous users can list Storage', async () => {
     const { fetchImpl } = fakeFetch((url) => (url.hostname === 'firebasestorage.googleapis.com' ? json(200, { items: [{ name: 'documents/a.pdf' }] }) : undefined));
     expect(failedNames(await smoke(fetchImpl))).toEqual(['Storage list documents/ is denied']);
+  });
+
+  describe('when something in front of the security rules refuses the request', () => {
+    const everyCollection = FIRESTORE_COLLECTIONS.map((collection) => `Firestore list ${collection} is denied`);
+    const firestoreOnly = (respond) => (url, init) => (url.hostname === 'firestore.googleapis.com' ? respond(url, init) : undefined);
+
+    // A browser key limited to this site, enforced the way Google enforces it: a request that does
+    // not come from this site is refused by the key before the security rules are consulted.
+    const keyLimitedToTheSite = (rules) =>
+      firestoreOnly((url, init) =>
+        new Headers(init.headers).get('referer') === `${BASE}/` ? rules() : json(403, { error: REFERRER_BLOCKED }),
+      );
+
+    it('gets a probe that looks like a visitor through to the rules', async () => {
+      const { fetchImpl } = fakeFetch(keyLimitedToTheSite(() => json(403, { error: FIRESTORE_RULES_DENIAL })));
+      expect(failedNames(await smoke(fetchImpl, { skipFunctions: true }))).toEqual([]);
+    });
+
+    it('still fails every collection the rules would let anonymous users read, instead of mistaking the key for the rules', async () => {
+      const readable = () => json(200, { documents: [{ name: 'projects/p/databases/(default)/documents/members/x' }] });
+      const { fetchImpl } = fakeFetch(keyLimitedToTheSite(readable));
+      expect(failedNames(await smoke(fetchImpl, { skipFunctions: true }))).toEqual(everyCollection);
+    });
+
+    it.each([
+      ['an HTTP-referrer restriction that excludes this site', REFERRER_BLOCKED, 'API_KEY_HTTP_REFERRER_BLOCKED'],
+      ['an API restriction that excludes Firestore', API_KEY_SERVICE_BLOCKED, 'API_KEY_SERVICE_BLOCKED'],
+      ['a disabled Firestore API', FIRESTORE_DISABLED, 'SERVICE_DISABLED'],
+    ])('fails every collection, rather than passing vacuously, under %s', async (_label, error, reason) => {
+      const { fetchImpl } = fakeFetch(firestoreOnly(() => json(403, { error })));
+      const rows = await smoke(fetchImpl, { skipFunctions: true });
+      expect(failedNames(rows)).toEqual(everyCollection);
+      const { detail } = row(rows, 'Firestore list members is denied');
+      expect(detail).toContain(reason);
+      expect(detail).toContain('refused before the security rules ran');
+    });
+
+    it('fails Storage the same way', async () => {
+      const { fetchImpl } = fakeFetch((url) =>
+        url.hostname === 'firebasestorage.googleapis.com' ? json(403, { error: STORAGE_DISABLED }) : undefined,
+      );
+      const rows = await smoke(fetchImpl, { skipFunctions: true });
+      expect(failedNames(rows)).toEqual(['Storage list documents/ is denied']);
+      expect(row(rows, 'Storage list documents/ is denied').detail).toContain('SERVICE_DISABLED');
+    });
   });
 
   it('fails a callable that lets an anonymous call through, and a bogus token that is not NOT_FOUND', async () => {

@@ -4,8 +4,8 @@
 //   node scripts/smoke/smoke.mjs --url <base> [--project sacg-garden-app] [--skip-functions]
 //                                [--attempts 1] [--retry-delay 10]
 //
-// Read-only: GET requests, anonymous Firestore/Storage list requests (which must be
-// refused), and three callable probes that must be refused or find nothing. No
+// Read-only: GET requests, anonymous Firestore/Storage list requests (which the security
+// rules must refuse), and three callable probes that must be refused or find nothing. No
 // credentials are sent. Prints a table and exits 1 if any check fails.
 //
 //   --skip-functions   skip the callable checks (first rollout only: the test preview is
@@ -19,11 +19,11 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { firebaseWebKey, formatFinding, scanText } from '../security/patterns.mjs';
 import {
+  anonymousListResult,
   assetUrls,
   callableErrorStatus,
   callableRejectsAnon,
   chunkUrls,
-  expectDenied,
   isSourceMap,
   isSpaShell,
   leakMarkers,
@@ -106,6 +106,13 @@ export async function runSmoke({
     if (!getCache.has(url)) getCache.set(url, http(fetchImpl, sleep, url));
     return getCache.get(url);
   };
+  // The anonymous Firestore and Storage probes send the Referer a visitor's browser sends from
+  // this site: just the origin, which is all Referrer-Policy: strict-origin-when-cross-origin
+  // lets through to Google. A browser key restricted to this site's referrer then treats the
+  // probe as it treats a visitor, so a refusal can only come from the security rules or from a
+  // restriction a real visitor would hit too. (Node's fetch sends no Referer on its own. Anyone
+  // can send this header, so the probe is no more privileged than an attacker.)
+  const probe = (url) => http(fetchImpl, sleep, url, { headers: { Referer: `${base}/` } });
   const post = (url, data) =>
     http(fetchImpl, sleep, url, {
       method: 'POST',
@@ -203,17 +210,15 @@ export async function runSmoke({
   for (const collection of FIRESTORE_COLLECTIONS) {
     await check('firestore', `Firestore list ${collection} is denied`, async () => {
       const url = `https://firestore.googleapis.com/v1/projects/${project}/databases/(default)/documents/${collection}?pageSize=1&key=${apiKey}`;
-      const { status, body } = await get(url);
-      const ok = expectDenied(status, body);
-      return { ok, detail: ok ? `HTTP ${status} permission denied` : `HTTP ${status}: anonymous list was not refused` };
+      const { status, body } = await probe(url);
+      return anonymousListResult(status, body);
     });
   }
 
   await check('storage', 'Storage list documents/ is denied', async () => {
     const url = `https://firebasestorage.googleapis.com/v0/b/${project}.firebasestorage.app/o?prefix=documents%2F&maxResults=1`;
-    const { status, body } = await get(url);
-    const ok = expectDenied(status, body);
-    return { ok, detail: ok ? `HTTP ${status} permission denied` : `HTTP ${status}: anonymous list was not refused` };
+    const { status, body } = await probe(url);
+    return anonymousListResult(status, body);
   });
 
   // --- callable functions -----------------------------------------------------------------
