@@ -1,0 +1,70 @@
+# Pushing to `test` publishes the Hosting build to the preview channel "test" and smoke-checks it.
+# Only Hosting is deployed from here, and the preview talks to the PRODUCTION Firebase backend
+# (same project, same data). Rules and functions are covered by emulator tests and go live
+# with `prod`. Credentials are keyless: Workload Identity Federation, no stored secrets.
+name: Deploy test
+
+on:
+  push:
+    branches: [test]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-test
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  deploy-preview:
+    name: deploy-preview
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: test
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # Install and build before authenticating, so no install script runs with credentials on disk.
+      - run: npm ci
+      - run: npm run build
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+      - name: Deploy to the preview channel
+        run: |
+          if ! npx -y firebase-tools@14.9.0 hosting:channel:deploy test --expires 30d --project sacg-garden-app --non-interactive --json > channel.json; then
+            cat channel.json >&2
+            exit 1
+          fi
+      - name: Read the preview URL
+        id: channel
+        run: |
+          set -euo pipefail
+          url=$(node -p 'JSON.parse(require("fs").readFileSync("channel.json", "utf8")).result["sacg-garden-app"].url')
+          case "$url" in
+            https://*) ;;
+            *) echo "unexpected preview URL: ${url}" >&2; exit 1 ;;
+          esac
+          echo "url=${url}" >> "$GITHUB_OUTPUT"
+          echo "Preview: ${url}" >> "$GITHUB_STEP_SUMMARY"
+      # First rollout only: the callables do not exist until `prod` deploys the functions for the
+      # first time. Set the repository variable SMOKE_SKIP_FUNCTIONS to "true" until then, then
+      # delete it (see docs/DEVELOPMENT.md).
+      - name: Smoke checks against the preview
+        env:
+          PREVIEW_URL: ${{ steps.channel.outputs.url }}
+        run: node scripts/smoke/smoke.mjs --url "$PREVIEW_URL" --attempts 3 ${{ vars.SMOKE_SKIP_FUNCTIONS == 'true' && '--skip-functions' || '' }}
