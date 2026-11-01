@@ -563,7 +563,17 @@ describe('ActionCard', () => {
 
       expect(mockedListenJob).toHaveBeenCalledWith('job-old-1', expect.any(Function));
       expect(mockedListenJob).toHaveBeenCalledWith('job-old-2', expect.any(Function));
-      expect(screen.getAllByText(/Test sent to Alice Example ✓/)).toHaveLength(2);
+      expect(screen.getAllByText(/Test queued for Alice Example ✓/)).toHaveLength(2);
+    });
+
+    it('says a test is queued, not sent, when its job id is unknown', async () => {
+      mockedExecute.mockResolvedValue({ status: 'proposed', result: {} });
+      renderCard(emailAction(), { actions: [eventExecuted] });
+
+      fireEvent.click(button('Send test'));
+
+      expect(await screen.findByText('Test queued for Brandon Ellis ✓')).toBeInTheDocument();
+      expect(screen.queryByText(/Test sent to/)).not.toBeInTheDocument();
     });
 
     it("doesn't list a test twice when its record arrives after the call returned", async () => {
@@ -780,7 +790,8 @@ describe('ActionCard', () => {
       );
 
       expect(screen.getByText('Done')).toBeInTheDocument();
-      expect(screen.getByText('Sent to 3 members ✓')).toBeInTheDocument();
+      expect(screen.getByText('Queued for 3 members ✓')).toBeInTheDocument();
+      expect(screen.getByText(/check Email → Recent emails for delivery status/)).toBeInTheDocument();
       expect(screen.getByText('1 skipped (no email address)')).toBeInTheDocument();
       expect(screen.getByText(/Approved by Brandon Ellis/)).toBeInTheDocument();
       expect(buttons()).toHaveLength(0);

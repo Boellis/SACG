@@ -203,7 +203,7 @@ export default function EmailActionCard({ threadId, action, members, me, actions
                   {t.jobId ? (
                     <EmailJobProgress jobId={t.jobId} />
                   ) : (
-                    <p className="text-sm text-green-700">{`Test sent to ${t.toName} ✓`}</p>
+                    <p className="text-sm text-green-700">{`Test queued for ${t.toName} ✓`}</p>
                   )}
                 </li>
               ))}
