@@ -6,6 +6,7 @@ import type { AdminCaller } from '../lib/auth';
 import { formatGardenWhen, parseGardenLocal } from '../lib/time';
 import { createEmailJob, EMAIL_JOBS } from '../email/jobs';
 import { appendMessage, threadRef } from './history';
+import { hideContactDetails } from './redact';
 import {
   ACTION_SCHEMAS,
   describeIssues,
@@ -437,6 +438,9 @@ async function recordFailure(db: Firestore, ref: DocumentReference, mode: Execut
   });
 }
 
+/** A person's name as it goes into an app note: the model reads notes, so contact details are hidden. */
+const forNote = (name: string) => hideContactDetails(name);
+
 /** Tell the assistant what an admin did (replayed before the admin's next message). Best effort. */
 async function appNote(db: Firestore, threadId: string, text: string): Promise<void> {
   try {
@@ -468,7 +472,7 @@ export async function executeAction(
     await appNote(
       db,
       args.threadId,
-      `[App update] ${args.caller.displayName} approved action ${args.actionId} (${claimed.type}): ${claimed.done.line}`,
+      `[App update] ${forNote(args.caller.displayName)} approved action ${args.actionId} (${claimed.type}): ${claimed.done.line}`,
     );
     return { status: 'executed', result: claimed.done.result };
   }
@@ -495,7 +499,7 @@ export async function executeAction(
         updatedAt: FieldValue.serverTimestamp(),
       }),
     );
-    await appNote(db, args.threadId, `[App update] Test email sent to ${toName} only.`);
+    await appNote(db, args.threadId, `[App update] Test email sent to ${forNote(toName)} only.`);
     return { status: 'proposed', result: done.result };
   }
 
@@ -514,7 +518,7 @@ export async function executeAction(
   await appNote(
     db,
     args.threadId,
-    `[App update] ${args.caller.displayName} approved action ${args.actionId} (${claimed.type}): ${done.line}`,
+    `[App update] ${forNote(args.caller.displayName)} approved action ${args.actionId} (${claimed.type}): ${done.line}`,
   );
   return { status: 'executed', result: done.result };
 }
@@ -532,6 +536,6 @@ export async function rejectAction(
     tx.update(ref, { status: 'rejected', updatedAt: FieldValue.serverTimestamp() });
     return String(snap.get('type'));
   });
-  await appNote(db, threadId, `[App update] ${caller.displayName} rejected action ${actionId} (${type}).`);
+  await appNote(db, threadId, `[App update] ${forNote(caller.displayName)} rejected action ${actionId} (${type}).`);
   return { status: 'rejected' };
 }

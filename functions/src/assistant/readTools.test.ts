@@ -154,6 +154,12 @@ describe('get_event_rsvps', () => {
     ]);
   });
 
+  it('hides phone numbers written without separators', async () => {
+    await db.doc('events/NOV7/rsvps/m-bea').update({ note: 'call 5125550142, or +15125550142 after 5' });
+    const out = await run('get_event_rsvps', { eventId: 'NOV7' });
+    expect(out.responses[0].note).toBe('call [phone hidden], or [phone hidden] after 5');
+  });
+
   it('answers an unknown event with an error the model can read', async () => {
     expect((await run('get_event_rsvps', { eventId: 'NOPE' })).error).toMatch(/list_events/);
     expect((await run('get_event_rsvps', { eventId: 'a/b' })).error).toEqual(expect.any(String));
@@ -240,6 +246,11 @@ describe('get_garden_info', () => {
       settings: { requiredHours: 12, currentSeason: '2026' },
     });
     expect(out.settings).not.toHaveProperty('contactEmail');
+  });
+
+  it("hides contact details in the admin's name", async () => {
+    const odd = { caller: { ...caller, displayName: 'Brandon 5125550142' }, now: NOW };
+    expect(JSON.parse(await runReadTool(db, 'get_garden_info', {}, odd)).admin).toBe('Brandon [phone hidden]');
   });
 });
 

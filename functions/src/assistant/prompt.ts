@@ -1,5 +1,6 @@
 import type { AdminCaller } from '../lib/auth';
 import { GARDEN_TZ, formatGardenDate } from '../lib/time';
+import { hideContactDetails } from './redact';
 
 /**
  * The assistant's standing instructions. Static on purpose: it sits in the
@@ -41,5 +42,6 @@ Replies
 
 /** The per-turn header on each admin message (garden date + who is asking). */
 export function turnContext({ caller, now }: { caller: AdminCaller; now: Date }): string {
-  return `[App context] Today is ${formatGardenDate(now)} (${GARDEN_TZ}). You are helping ${caller.displayName} (admin).`;
+  const name = hideContactDetails(caller.displayName);
+  return `[App context] Today is ${formatGardenDate(now)} (${GARDEN_TZ}). You are helping ${name} (admin).`;
 }

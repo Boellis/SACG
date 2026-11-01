@@ -186,6 +186,17 @@ describe('executeAction: send_email', () => {
     expect((await jobs()).filter((j) => !j.test)).toHaveLength(1);
   });
 
+  it('hides contact details in the names it puts in app notes (the model reads them)', async () => {
+    await db.doc('members/m-pat').set({ displayName: 'Pat 5125550142', email: 'pat@example.com', role: 'member', status: 'active' });
+    const id = await propose('send_email', EMAIL);
+    await run(id, { mode: 'test', testMemberId: 'm-pat' });
+    await run(id, { caller: { ...brandon, displayName: 'Brandon brandon@example.com' } });
+    const [test, approval] = await notes();
+    expect(test.display.text).toBe('[App update] Test email sent to Pat [phone hidden] only.');
+    expect(approval.display.text).toMatch(/^\[App update\] Brandon \[email hidden\] approved action /);
+    expect(JSON.stringify([test.raw, approval.raw])).not.toMatch(/5125550142|@/);
+  });
+
   it('test-sends to a chosen member', async () => {
     const id = await propose('send_email', EMAIL);
     await run(id, { mode: 'test', testMemberId: 'm-denny' });

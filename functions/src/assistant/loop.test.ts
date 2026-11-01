@@ -445,6 +445,11 @@ describe('prompt', () => {
     }
   });
 
+  it("hides contact details in the admin's name", () => {
+    const odd = { ...caller, displayName: 'Brandon brandon@example.com' };
+    expect(turnContext({ caller: odd, now: NOW })).toContain('You are helping Brandon [email hidden] (admin).');
+  });
+
   it("gives each turn the garden date and the admin's name", () => {
     expect(turnContext({ caller, now: NOW })).toBe(CONTEXT);
     // 11 PM on Nov 1 in Chicago is already Nov 2 in UTC.
