@@ -15,6 +15,19 @@ build/
 member-cleanup/serviceAccount.json
 member-cleanup/report-*.json
 
+# This repo is PUBLIC: never commit member data or credentials. These patterns are
+# enforced again in CI by scripts/security/scan-repo.mjs and gitleaks.
+members_list*.txt
+*.roster.*
+backup-*.json
+report-*.json
+**/serviceAccount*.json
+*-firebase-adminsdk-*.json
+*.pem
+*.p12
+*.key
+.secrets/
+
 # Firebase
 .firebase/
 # Firebase Extensions — local secret references (point to Secret Manager; never commit)
