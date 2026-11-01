@@ -165,6 +165,28 @@ describe('createEmailJob', () => {
     await expect(createEmailJob(db, input({ rsvpEventId: 'nope' }))).rejects.toMatchObject({ code: 'not-found' });
   });
 
+  it('with a fixed jobId, queues under that id, and a repeat call returns the same job without queuing another', async () => {
+    const first = await createEmailJob(db, input({ jobId: 'action-1' }));
+    expect(first).toEqual({ jobId: 'action-1', total: 3, skipped: 0 });
+    const again = await createEmailJob(db, input({ jobId: 'action-1', subject: 'Changed' }));
+    expect(again).toEqual(first);
+    expect((await db.collection('emailJobs').get()).size).toBe(1);
+    expect((await jobDoc('action-1')).subject).toBe('Hello {firstName}');
+  });
+
+  it('returns an already-queued fixed-id job even if its audience would no longer resolve', async () => {
+    await createEmailJob(db, input({ jobId: 'action-1' }));
+    await db.doc('members/m-bea').update({ status: 'inactive' });
+    await db.doc('members/m-denny').update({ status: 'inactive' });
+    await db.doc('members/admin1').update({ status: 'inactive' });
+    await expect(createEmailJob(db, input({ jobId: 'action-1' }))).resolves.toEqual({ jobId: 'action-1', total: 3, skipped: 0 });
+  });
+
+  it('rejects a path-like fixed jobId', async () => {
+    await expect(createEmailJob(db, input({ jobId: 'a/b' }))).rejects.toMatchObject({ code: 'invalid-argument' });
+    expect((await db.collection('emailJobs').get()).size).toBe(0);
+  });
+
   it.each([
     ['empty subject', { subject: '   ' }],
     ['subject over 200 chars', { subject: 'x'.repeat(201) }],

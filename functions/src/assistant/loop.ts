@@ -15,11 +15,19 @@ import { EFFORT, FALLBACK_BETA, MAX_TOKENS, MAX_TOOL_ITERATIONS, MODEL } from '.
 import { appendMessage, loadHistory } from './history';
 import { SYSTEM_PROMPT, turnContext } from './prompt';
 import { runReadTool } from './readTools';
+import { neutralizeAppMarkers } from './redact';
 import { ACTION_SCHEMAS, describeIssues } from './schemas';
 import { PROPOSE_TOOL_ACTION, READ_TOOLS, TOOL_DEFINITIONS, TOOL_LABELS } from './tools';
 
+/** Per-call limits: `timeout` per attempt, one retry, and a signal that ends the whole call (retries included). */
+export interface ModelCallOptions {
+  timeout: number;
+  maxRetries: number;
+  signal: AbortSignal;
+}
+
 /** One non-streaming Messages API call (the beta endpoint, for server-side fallbacks). */
-export type CreateMessage = (params: MessageCreateParamsNonStreaming) => Promise<BetaMessage>;
+export type CreateMessage = (params: MessageCreateParamsNonStreaming, options?: ModelCallOptions) => Promise<BetaMessage>;
 
 export const REFUSAL_REPLY = "I can't help with that one. Try rephrasing, or ask Brandon.";
 const TRUNCATED_NOTE = '(My reply got cut off because it ran too long. Ask me to continue, or to keep it shorter.)';
@@ -29,7 +37,14 @@ const PAUSED_NOTE = '(I paused here to stay within my limits for one message. Sa
  * No new model call starts after this much of a turn has passed, so the turn
  * ends with a reply instead of hitting assistantChat's 300 s timeout.
  */
-export const TURN_TIME_BUDGET_MS = 240_000;
+export const TURN_TIME_BUDGET_MS = 210_000;
+/**
+ * No model call runs past this point of a turn (the SDK's default would be a
+ * 10-minute timeout with 2 retries): each call gets what is left as its
+ * timeout and as an abort signal, leaving room for the last tool results,
+ * writes and finishTurn inside the 300 s function timeout.
+ */
+export const TURN_DEADLINE_MS = 270_000;
 
 const Summary = z.string().trim().min(1).max(300);
 
@@ -61,6 +76,13 @@ const textOf = (content: BetaContentBlock[]) =>
     .map((b) => b.text)
     .join('\n\n');
 const withNote = (text: string, note: string) => (text ? `${text}\n\n${note}` : note);
+
+/** What the admin sees when the model ends its turn without writing anything. */
+function emptyReply(proposals: number): string {
+  if (proposals === 0) return "I didn't write a reply that time. Try asking again, or put it another way.";
+  const what = proposals === 1 ? 'a proposal' : `${proposals} proposals`;
+  return `I saved ${what} for you to review below. Nothing has been sent or changed yet.`;
+}
 
 const result = (id: string, content: string, isError = false): BetaToolResultBlockParam => ({
   type: 'tool_result',
@@ -140,17 +162,20 @@ async function runTool(ctx: ToolContext, block: BetaToolUseBlock): Promise<{ res
  */
 export async function runTurn(
   deps: { db: Firestore; createMessage: CreateMessage; now?: () => Date },
-  args: { threadId: string; caller: AdminCaller; userText: string },
+  args: { threadId: string; caller: AdminCaller; userText: string; turnToken?: string },
 ): Promise<{ reply: string; actionIds: string[] }> {
   const { db, createMessage } = deps;
   const now = deps.now ?? (() => new Date());
-  const { threadId, caller, userText } = args;
+  const { threadId, caller, userText, turnToken } = args;
   const startedAt = now().getTime();
+  // Every write of this turn is fenced by its token (see appendMessage).
+  const append = (entry: Parameters<typeof appendMessage>[2]) => appendMessage(db, threadId, entry, turnToken);
 
-  await appendMessage(db, threadId, {
+  await append({
     role: 'user',
     kind: 'user_text',
-    content: [{ type: 'text', text: `${turnContext({ caller, now: now() })}\n\n${userText}` }],
+    // What the admin typed is data: an app marker in it can't pass for the app's own.
+    content: [{ type: 'text', text: `${turnContext({ caller, now: now() })}\n\n${neutralizeAppMarkers(userText)}` }],
     display: { text: userText },
     authorUid: caller.uid,
     authorName: caller.displayName,
@@ -159,14 +184,20 @@ export async function runTurn(
   const actionIds: string[] = [];
   let reply = '';
   for (let step = 0; step < MAX_TOOL_ITERATIONS; step++) {
-    if (step > 0 && now().getTime() - startedAt >= TURN_TIME_BUDGET_MS) return { reply: withNote(reply, PAUSED_NOTE), actionIds };
+    const elapsed = now().getTime() - startedAt;
+    if (step > 0 && elapsed >= TURN_TIME_BUDGET_MS) return { reply: withNote(reply, PAUSED_NOTE), actionIds };
+    const remaining = Math.max(1_000, TURN_DEADLINE_MS - elapsed);
 
-    const response = await createMessage(buildRequest(await loadHistory(db, threadId)));
+    const response = await createMessage(buildRequest(await loadHistory(db, threadId)), {
+      timeout: remaining,
+      maxRetries: 1,
+      signal: AbortSignal.timeout(remaining),
+    });
 
     if (response.stop_reason === 'refusal') {
       // A refused reply may be empty or cut off, so it can't be replayed; the
       // friendly reply takes its place in the history.
-      await appendMessage(db, threadId, {
+      await append({
         role: 'assistant',
         kind: 'assistant',
         content: [{ type: 'text', text: REFUSAL_REPLY }],
@@ -176,11 +207,14 @@ export async function runTurn(
     }
 
     const toolUses = response.content.filter(isToolUse);
-    reply = textOf(response.content);
-    await appendMessage(db, threadId, {
+    // A final message with no text still gets a reply. Empty content can't be
+    // replayed (the API rejects an empty message mid-history), so it is stored
+    // as that reply, like a refusal; any other content is stored verbatim.
+    reply = textOf(response.content) || (toolUses.length === 0 ? emptyReply(actionIds.length) : '');
+    await append({
       role: 'assistant',
       kind: 'assistant',
-      content: response.content,
+      content: response.content.length > 0 ? response.content : [{ type: 'text', text: reply }],
       display: { text: reply, tools: toolUses.map((t) => ({ name: t.name, label: labelOf(t.name) })) },
     });
 
@@ -198,7 +232,7 @@ export async function runTurn(
       results.push(ran.result);
       if (ran.actionId) actionIds.push(ran.actionId);
     }
-    await appendMessage(db, threadId, {
+    await append({
       role: 'user',
       kind: 'tool_results',
       content: results,

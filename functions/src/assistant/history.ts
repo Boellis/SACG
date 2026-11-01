@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { FieldValue, Timestamp, type Firestore } from 'firebase-admin/firestore';
 import { HttpsError } from 'firebase-functions/v2/https';
 import type { BetaMessageParam } from '@anthropic-ai/sdk/resources/beta/messages/messages';
@@ -39,20 +40,39 @@ export const TURN_LEASE_MS = 330_000;
 export const threadRef = (db: Firestore, threadId: string) => db.collection(ASSISTANT_THREADS).doc(threadId);
 const messageId = (seq: number) => String(seq).padStart(6, '0');
 
+/** A write from a turn that no longer holds its thread: its lease lapsed and a newer turn took over. */
+export class StaleTurnError extends Error {
+  constructor(threadId: string) {
+    super(`assistant thread ${threadId}: this turn no longer holds the thread, so it stops writing`);
+    this.name = 'StaleTurnError';
+  }
+}
+
 /**
  * Append one message to a thread's history: `messages/{seq}` with seq = the
  * number of messages so far (zero-padded to 6 for the doc id). The thread's
  * `messageCount` is read and bumped in the same transaction, so concurrent
  * appends (an approval landing during a turn) never collide. History is
  * append-only: nothing ever edits or deletes a stored message.
+ *
+ * A turn passes its `turnToken` (from startTurn): if the thread is no longer
+ * held by that turn, the append is refused with StaleTurnError, so a turn that
+ * outlived its lease can't interleave with the next one. App notes, written
+ * outside any turn, pass none.
  */
-export async function appendMessage(db: Firestore, threadId: string, entry: NewMessage): Promise<number> {
+export async function appendMessage(
+  db: Firestore,
+  threadId: string,
+  entry: NewMessage,
+  turnToken?: string,
+): Promise<number> {
   const thread = threadRef(db, threadId);
   const display: MessageDisplay = { text: entry.display.text };
   if (entry.display.tools?.length) display.tools = entry.display.tools;
   return db.runTransaction(async (tx) => {
     const snap = await tx.get(thread);
     if (!snap.exists) throw new Error(`assistant thread ${threadId} does not exist`);
+    if (turnToken !== undefined && snap.get('turnToken') !== turnToken) throw new StaleTurnError(threadId);
     const seq = Number(snap.get('messageCount') ?? 0);
     tx.create(thread.collection('messages').doc(messageId(seq)), {
       seq,
@@ -74,6 +94,9 @@ const toolUseIds = (content: unknown): string[] =>
     ? content.filter((b) => b?.type === 'tool_use' && typeof b.id === 'string').map((b) => b.id as string)
     : [];
 
+const isEmptyContent = (content: unknown) =>
+  content === '' || content === null || content === undefined || (Array.isArray(content) && content.length === 0);
+
 const unfinishedResult = (id: string) => ({
   type: 'tool_result',
   tool_use_id: id,
@@ -93,6 +116,8 @@ const unfinishedResult = (id: string) => ({
  *   one exists.
  * - An assistant tool call whose results were never stored (the function died
  *   between the two appends) gets an error result, so the thread stays usable.
+ * - An assistant message with empty content is skipped: the API rejects one
+ *   anywhere but last, and it carries nothing to replay.
  */
 export function toApiMessages(entries: StoredEntry[]): BetaMessageParam[] {
   const out: BetaMessageParam[] = [];
@@ -103,6 +128,7 @@ export function toApiMessages(entries: StoredEntry[]): BetaMessageParam[] {
     pendingToolUses = [];
   };
   for (const e of entries) {
+    if (e.kind === 'assistant' && isEmptyContent(e.content)) continue;
     const msg = { role: e.role, content: e.content } as BetaMessageParam;
     if (e.kind === 'app_note') {
       notes.push(msg);
@@ -139,14 +165,16 @@ const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim();
  * Begin an admin turn: create the thread (titled from the message's first 60
  * characters, `updatedAt` = `createdAt`) or continue an existing one, and claim
  * it so a second message can't run alongside (two interleaved turns would
- * corrupt the history). A full thread takes no more turns.
+ * corrupt the history). The claim is a lease plus a fresh `turnToken` that the
+ * turn passes to every write. A full thread takes no more turns.
  */
 export async function startTurn(
   db: Firestore,
   { threadId, caller, message, now }: { threadId?: string; caller: AdminCaller; message: string; now: Date },
-): Promise<string> {
+): Promise<{ threadId: string; turnToken: string }> {
   const ref = threadId ? threadRef(db, threadId) : db.collection(ASSISTANT_THREADS).doc();
   const lease = Timestamp.fromDate(now);
+  const turnToken = randomUUID();
   await db.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     if (!snap.exists) {
@@ -159,6 +187,7 @@ export async function startTurn(
         updatedAt: FieldValue.serverTimestamp(),
         messageCount: 0,
         turnStartedAt: lease,
+        turnToken,
       });
       return;
     }
@@ -172,17 +201,30 @@ export async function startTurn(
         "I'm still working on the last message in this conversation. Wait for that reply, then send again.",
       );
     }
-    tx.update(ref, { turnStartedAt: lease });
+    tx.update(ref, { turnStartedAt: lease, turnToken });
   });
-  return ref.id;
+  return { threadId: ref.id, turnToken };
 }
 
-/** End a turn: bump `updatedAt`, record the reply preview (when there is one) and free the thread. */
-export async function finishTurn(db: Firestore, threadId: string, reply?: string): Promise<void> {
+/**
+ * End a turn: bump `updatedAt`, record the reply preview (when there is one)
+ * and free the thread. Only the turn that holds the thread can do this; a
+ * stale turn's finish changes nothing.
+ */
+export async function finishTurn(
+  db: Firestore,
+  { threadId, turnToken, reply }: { threadId: string; turnToken: string; reply?: string },
+): Promise<void> {
+  const ref = threadRef(db, threadId);
   const preview = reply ? oneLine(reply) : '';
-  await threadRef(db, threadId).update({
-    updatedAt: FieldValue.serverTimestamp(),
-    turnStartedAt: FieldValue.delete(),
-    ...(preview ? { lastReplyPreview: preview.length > 160 ? `${preview.slice(0, 159)}…` : preview } : {}),
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists || snap.get('turnToken') !== turnToken) return;
+    tx.update(ref, {
+      updatedAt: FieldValue.serverTimestamp(),
+      turnStartedAt: FieldValue.delete(),
+      turnToken: FieldValue.delete(),
+      ...(preview ? { lastReplyPreview: preview.length > 160 ? `${preview.slice(0, 159)}…` : preview } : {}),
+    });
   });
 }

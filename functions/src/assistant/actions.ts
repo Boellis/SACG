@@ -1,11 +1,12 @@
-import { FieldValue, Timestamp, type DocumentReference, type Firestore } from 'firebase-admin/firestore';
+import { FieldValue, Timestamp, type DocumentData, type DocumentReference, type Firestore } from 'firebase-admin/firestore';
 import { HttpsError } from 'firebase-functions/v2/https';
 import { logger } from 'firebase-functions/v2';
 import { APP_URL } from '../config';
 import type { AdminCaller } from '../lib/auth';
 import { formatGardenWhen, parseGardenLocal } from '../lib/time';
-import { createEmailJob } from '../email/jobs';
+import { createEmailJob, EMAIL_JOBS } from '../email/jobs';
 import { appendMessage, threadRef } from './history';
+import { hideContactDetails, neutralizeAppMarkers } from './redact';
 import {
   ACTION_SCHEMAS,
   describeIssues,
@@ -107,6 +108,15 @@ export interface ExecuteActionArgs {
 
 const CALENDAR_URL = `${APP_URL}/calendar`;
 
+/**
+ * How long a run's claim ('executing') stands: twice assistantExecuteAction's
+ * 60 s timeout, so a live run is never second-guessed. An older claim belongs
+ * to a run that died, and the next approval finishes or releases it.
+ */
+export const EXECUTE_LEASE_MS = 120_000;
+
+const has = (record: object, key: string) => Object.prototype.hasOwnProperty.call(record, key);
+
 const NOT_PROPOSED: Record<string, string> = {
   executing: 'This action is already in progress.',
   executed: 'This action was already approved and done.',
@@ -114,13 +124,91 @@ const NOT_PROPOSED: Record<string, string> = {
   failed: "This action failed and can't be run again. Ask the assistant for a new one.",
 };
 const notProposed = (status: unknown) =>
-  new HttpsError(
-    'failed-precondition',
-    Object.prototype.hasOwnProperty.call(NOT_PROPOSED, String(status)) ? NOT_PROPOSED[String(status)] : "This action can't be run.",
-  );
+  new HttpsError('failed-precondition', has(NOT_PROPOSED, String(status)) ? NOT_PROPOSED[String(status)] : "This action can't be run.");
 const notFound = () => new HttpsError('not-found', "That proposal doesn't exist.");
 
 const asDate = (v: unknown): Date | null => (v instanceof Timestamp ? v.toDate() : null);
+// gRPC ALREADY_EXISTS from create().
+const isAlreadyExists = (err: unknown) => (err as { code?: unknown } | null)?.code === 6;
+
+type Done = { result: Json; line: string };
+
+/** Approved effects that create one document, keyed by the action id, so a run can create it at most once. */
+type KeyedType = Exclude<ActionType, 'update_event'>;
+const EFFECT_COLLECTION: Record<KeyedType, string> = {
+  create_event: 'events',
+  send_email: EMAIL_JOBS,
+  post_announcement: 'announcements',
+  create_poll: 'polls',
+};
+const isKeyed = (type: ActionType): type is KeyedType => type !== 'update_event';
+
+/** The result and app-note line for an effect's document, whichever attempt wrote it. */
+function describeEffect(type: KeyedType, id: string, data: DocumentData): Done {
+  switch (type) {
+    case 'create_event': {
+      const title = String(data.title ?? '');
+      const start = asDate(data.start);
+      const end = asDate(data.end);
+      const when = start && end ? formatGardenWhen(start, end, data.allDay === true) : '';
+      return {
+        result: { eventId: id, title, when, url: CALENDAR_URL },
+        line: `created the calendar event "${forNote(title)}" (event id ${id}) for ${when}.`,
+      };
+    }
+    case 'send_email': {
+      const total = Number(data.total ?? 0);
+      const skipped = Number(data.skippedNoEmail ?? 0);
+      const skippedText = skipped ? ` (${skipped} skipped: no email address)` : '';
+      return {
+        result: { jobId: id, total, skipped },
+        line: `queued email job ${id} to ${total} member${total === 1 ? '' : 's'}${skippedText}.`,
+      };
+    }
+    case 'post_announcement': {
+      const title = String(data.title ?? '');
+      return {
+        result: { announcementId: id, title, url: `${APP_URL}/lounge` },
+        line: `posted the announcement "${forNote(title)}" (id ${id}) in the Members Lounge.`,
+      };
+    }
+    case 'create_poll': {
+      const question = String(data.question ?? '');
+      return {
+        result: { pollId: id, question, url: `${APP_URL}/polls` },
+        line: `created the poll "${forNote(question)}" (id ${id}).`,
+      };
+    }
+  }
+}
+
+/**
+ * Create `ref` once. If an earlier attempt already created it (one whose reply
+ * was lost, say), that document stands and `build` isn't called: no re-checks
+ * and no second write. Returns what is stored.
+ */
+async function createOnce(ref: DocumentReference, build: () => DocumentData): Promise<DocumentData> {
+  const existing = await ref.get();
+  if (existing.exists) return existing.data()!;
+  const data = build();
+  try {
+    await ref.create(data);
+    return data;
+  } catch (err) {
+    if (isAlreadyExists(err)) return (await ref.get()).data()!;
+    throw err;
+  }
+}
+
+/** Run a write, and once more after a short pause if it fails. */
+export async function retryOnce(write: () => Promise<unknown>, pauseMs = 200): Promise<void> {
+  try {
+    await write();
+  } catch {
+    await new Promise((resolve) => setTimeout(resolve, pauseMs));
+    await write();
+  }
+}
 
 /** The end (11:59 PM garden time) of a `YYYY-MM-DD` day, which must still be ahead. */
 function lastMomentOf(date: string | undefined, now: Date, what: string): Timestamp | null {
@@ -132,27 +220,53 @@ function lastMomentOf(date: string | undefined, now: Date, what: string): Timest
   return Timestamp.fromDate(at);
 }
 
-interface Claim {
-  type: ActionType;
-  input: Json;
-  rsvpEventId?: string;
-}
+type Claim =
+  | { kind: 'claimed'; type: ActionType; input: Json; rsvpEventId?: string }
+  | { kind: 'finished'; type: ActionType; done: Done };
+
+const claimIsFresh = (claimedAt: unknown, now: Date) =>
+  claimedAt instanceof Timestamp && now.getTime() - claimedAt.toMillis() < EXECUTE_LEASE_MS;
 
 /**
  * The transaction that guards execution: the action must still be 'proposed',
  * a test send must be an email, the input with any overrides (shallow; an
  * audience or rsvp is replaced whole) must pass its schema again, and an
  * email's RSVP event proposal must already be executed. A run then marks the
- * action 'executing', so a second approval (double click, retry) is refused.
+ * action 'executing' (with `claimedAt`), so a second approval is refused.
+ *
+ * An action left 'executing' by a run that died (claim older than
+ * EXECUTE_LEASE_MS) is finished as 'executed' when its effect exists (the run
+ * only lost its last write), or else released back to 'proposed', and this
+ * request carries on from there.
  */
-async function claim(db: Firestore, ref: DocumentReference, args: ExecuteActionArgs): Promise<Claim> {
-  return db.runTransaction(async (tx) => {
+async function claim(db: Firestore, ref: DocumentReference, args: ExecuteActionArgs, now: Date): Promise<Claim> {
+  return db.runTransaction(async (tx): Promise<Claim> => {
     const snap = await tx.get(ref);
     if (!snap.exists) throw notFound();
-    if (snap.get('status') !== 'proposed') throw notProposed(snap.get('status'));
     const type = snap.get('type') as ActionType;
-    const schema = Object.prototype.hasOwnProperty.call(ACTION_SCHEMAS, type) ? ACTION_SCHEMAS[type] : undefined;
+    const schema = has(ACTION_SCHEMAS, type) ? ACTION_SCHEMAS[type] : undefined;
     if (!schema) throw new HttpsError('failed-precondition', "This app can't run that kind of action.");
+    const status = snap.get('status');
+    const stuck = status === 'executing';
+    if (stuck) {
+      if (claimIsFresh(snap.get('claimedAt'), now)) throw notProposed(status);
+      if (isKeyed(type)) {
+        const effect = await tx.get(db.collection(EFFECT_COLLECTION[type]).doc(args.actionId));
+        if (effect.exists) {
+          const done = describeEffect(type, effect.id, effect.data()!);
+          tx.update(ref, {
+            status: 'executed',
+            result: done.result,
+            executedAt: FieldValue.serverTimestamp(),
+            error: FieldValue.delete(),
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+          return { kind: 'finished', type, done };
+        }
+      }
+    } else if (status !== 'proposed') {
+      throw notProposed(status);
+    }
     if (args.mode === 'test' && type !== 'send_email') {
       throw new HttpsError('invalid-argument', 'Only emails can be sent as a test.');
     }
@@ -175,12 +289,22 @@ async function claim(db: Firestore, ref: DocumentReference, args: ExecuteActionA
     if (args.mode === 'run') {
       tx.update(ref, {
         status: 'executing',
+        claimedAt: Timestamp.fromDate(now),
         executedBy: args.caller.uid,
         executedByName: args.caller.displayName,
         updatedAt: FieldValue.serverTimestamp(),
       });
+    } else if (stuck) {
+      // A test from a dead run's claim: release it first.
+      tx.update(ref, {
+        status: 'proposed',
+        claimedAt: FieldValue.delete(),
+        executedBy: FieldValue.delete(),
+        executedByName: FieldValue.delete(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
     }
-    return { type, input, rsvpEventId };
+    return { kind: 'claimed', type, input, rsvpEventId };
   });
 }
 
@@ -209,37 +333,43 @@ async function updateEvent(db: Firestore, u: UpdateEventAction): Promise<{ resul
     const changed = Object.keys(patch);
     return {
       result: { eventId: ref.id, title, when, url: CALENDAR_URL, changed },
-      line: `updated the calendar event "${title}" (event id ${ref.id}): changed ${changed.join(', ')}; it is now ${when}.`,
+      line: `updated the calendar event "${forNote(title)}" (event id ${ref.id}): changed ${changed.join(', ')}; it is now ${when}.`,
     };
   });
 }
 
-/** Do what the action says. `line` is the one-line outcome for the app note. */
-async function perform(db: Firestore, c: Claim, args: ExecuteActionArgs, now: Date): Promise<{ result: Json; line: string }> {
-  const { caller } = args;
+/**
+ * Do what the action says, at most once per action: a run's document is keyed
+ * by the action id (written with create()), so a retry or re-approve finds it
+ * and reports it instead of writing again. Test sends are repeatable by
+ * design and get fresh job ids. `line` is the one-line outcome for the app note.
+ */
+async function perform(
+  db: Firestore,
+  c: Extract<Claim, { kind: 'claimed' }>,
+  args: ExecuteActionArgs,
+  now: Date,
+): Promise<Done> {
+  const { caller, actionId } = args;
+  const keyed = (type: KeyedType) => db.collection(EFFECT_COLLECTION[type]).doc(actionId);
   switch (c.type) {
     case 'create_event': {
       const e = c.input as CreateEventAction;
-      const start = parseGardenLocal(e.start);
-      const end = parseGardenLocal(e.end);
       // Shaped like the calendar page's createEvent.
-      const ref = await db.collection('events').add({
+      const stored = await createOnce(keyed('create_event'), () => ({
         title: e.title,
         type: e.type,
-        start: Timestamp.fromDate(start),
-        end: Timestamp.fromDate(end),
+        start: Timestamp.fromDate(parseGardenLocal(e.start)),
+        end: Timestamp.fromDate(parseGardenLocal(e.end)),
         allDay: e.allDay,
         ...(e.location ? { location: e.location } : {}),
         ...(e.description ? { description: e.description } : {}),
         createdBy: caller.uid,
-      });
-      const when = formatGardenWhen(start, end, e.allDay);
-      return {
-        result: { eventId: ref.id, title: e.title, when, url: CALENDAR_URL },
-        line: `created the calendar event "${e.title}" (event id ${ref.id}) for ${when}.`,
-      };
+      }));
+      return describeEffect('create_event', actionId, stored);
     }
     case 'update_event':
+      // A patch: applying it again changes nothing.
       return updateEvent(db, c.input as UpdateEventAction);
     case 'send_email': {
       const email = c.input as SendEmailAction;
@@ -252,19 +382,15 @@ async function perform(db: Firestore, c: Claim, args: ExecuteActionArgs, now: Da
         source: 'assistant',
         createdBy: caller.uid,
         createdByName: caller.displayName,
-        assistantRef: { threadId: args.threadId, actionId: args.actionId },
-        ...(args.mode === 'test' ? { testMemberId: args.testMemberId ?? caller.uid } : {}),
+        assistantRef: { threadId: args.threadId, actionId },
+        ...(args.mode === 'test' ? { testMemberId: args.testMemberId ?? caller.uid } : { jobId: actionId }),
       });
-      const skipped = job.skipped ? ` (${job.skipped} skipped: no email address)` : '';
-      return {
-        result: { jobId: job.jobId, total: job.total, skipped: job.skipped },
-        line: `queued email job ${job.jobId} to ${job.total} member${job.total === 1 ? '' : 's'}${skipped}.`,
-      };
+      return describeEffect('send_email', job.jobId, { total: job.total, skippedNoEmail: job.skipped });
     }
     case 'post_announcement': {
       const a = c.input as AnnouncementAction;
       // Shaped like the lounge's createAnnouncement.
-      const ref = await db.collection('announcements').add({
+      const stored = await createOnce(keyed('post_announcement'), () => ({
         title: a.title,
         body: a.body,
         pinned: a.pinned,
@@ -272,16 +398,13 @@ async function perform(db: Firestore, c: Claim, args: ExecuteActionArgs, now: Da
         createdBy: caller.uid,
         authorName: caller.displayName,
         createdAt: FieldValue.serverTimestamp(),
-      });
-      return {
-        result: { announcementId: ref.id, title: a.title, url: `${APP_URL}/lounge` },
-        line: `posted the announcement "${a.title}" (id ${ref.id}) in the Members Lounge.`,
-      };
+      }));
+      return describeEffect('post_announcement', actionId, stored);
     }
     case 'create_poll': {
       const p = c.input as PollAction;
       // Shaped like the polls page's createPoll.
-      const ref = await db.collection('polls').add({
+      const stored = await createOnce(keyed('create_poll'), () => ({
         question: p.question,
         options: p.options.map((text, i) => ({ id: String(i), text })),
         createdBy: caller.uid,
@@ -289,11 +412,8 @@ async function perform(db: Firestore, c: Claim, args: ExecuteActionArgs, now: Da
         expiresAt: lastMomentOf(p.closesOn, now, "This poll's closing day"),
         closed: false,
         createdAt: FieldValue.serverTimestamp(),
-      });
-      return {
-        result: { pollId: ref.id, question: p.question, url: `${APP_URL}/polls` },
-        line: `created the poll "${p.question}" (id ${ref.id}).`,
-      };
+      }));
+      return describeEffect('create_poll', actionId, stored);
     }
   }
 }
@@ -307,6 +427,7 @@ async function recordFailure(db: Firestore, ref: DocumentReference, mode: Execut
       tx.update(ref, {
         status: 'proposed',
         error,
+        claimedAt: FieldValue.delete(),
         executedBy: FieldValue.delete(),
         executedByName: FieldValue.delete(),
         updatedAt: FieldValue.serverTimestamp(),
@@ -316,6 +437,12 @@ async function recordFailure(db: Firestore, ref: DocumentReference, mode: Execut
     }
   });
 }
+
+/**
+ * Text people wrote (names, titles, questions) as it goes into an app note. The
+ * model reads notes, so contact details are hidden and app markers rewritten.
+ */
+const forNote = (text: string) => hideContactDetails(neutralizeAppMarkers(text));
 
 /** Tell the assistant what an admin did (replayed before the admin's next message). Best effort. */
 async function appNote(db: Firestore, threadId: string, text: string): Promise<void> {
@@ -331,9 +458,11 @@ async function appNote(db: Firestore, threadId: string, text: string): Promise<v
  * job queued (onEmailJobCreated sends it), announcement or poll posted. `test`
  * (emails only) queues the email to exactly one member (`testMemberId`, default
  * the approving admin), records it in `tests` and leaves the action proposed.
- * A failure puts the action back to 'proposed' with `error`; after the effect
- * has happened the action never returns to 'proposed', so it can't run twice.
- * Either way the thread gets an app note.
+ * A failure puts the action back to 'proposed' with `error`. Effects are keyed
+ * by the action id, so even a failure whose write did commit can't make a
+ * re-approval do it twice; and a run that dies after its effect leaves the
+ * action 'executing' until the next approval finishes it (see claim). The
+ * final status write is retried once. Either way the thread gets an app note.
  */
 export async function executeAction(
   db: Firestore,
@@ -341,8 +470,16 @@ export async function executeAction(
 ): Promise<{ status: string; result: Record<string, unknown> }> {
   const now = args.now ?? new Date();
   const ref = actionsCol(db, args.threadId).doc(args.actionId);
-  const claimed = await claim(db, ref, args);
-  let done: { result: Json; line: string };
+  const claimed = await claim(db, ref, args, now);
+  if (claimed.kind === 'finished') {
+    await appNote(
+      db,
+      args.threadId,
+      `[App update] ${forNote(args.caller.displayName)} approved action ${args.actionId} (${claimed.type}): ${claimed.done.line}`,
+    );
+    return { status: 'executed', result: claimed.done.result };
+  }
+  let done: Done;
   try {
     done = await perform(db, claimed, args, now);
   } catch (err) {
@@ -357,28 +494,34 @@ export async function executeAction(
     const testMemberId = args.testMemberId ?? args.caller.uid;
     const member = await db.collection('members').doc(testMemberId).get();
     const toName = String(member.get('displayName') ?? '').trim() || 'one member';
-    await ref.update({
-      input: claimed.input,
-      tests: FieldValue.arrayUnion({ at: Timestamp.fromDate(now), toName, jobId: done.result.jobId }),
-      error: FieldValue.delete(),
-      updatedAt: FieldValue.serverTimestamp(),
-    });
-    await appNote(db, args.threadId, `[App update] Test email sent to ${toName} only.`);
+    await retryOnce(() =>
+      ref.update({
+        input: claimed.input,
+        tests: FieldValue.arrayUnion({ at: Timestamp.fromDate(now), toName, jobId: done.result.jobId }),
+        error: FieldValue.delete(),
+        updatedAt: FieldValue.serverTimestamp(),
+      }),
+    );
+    await appNote(db, args.threadId, `[App update] Test email sent to ${forNote(toName)} only.`);
     return { status: 'proposed', result: done.result };
   }
 
-  await ref.update({
-    status: 'executed',
-    input: claimed.input,
-    result: done.result,
-    executedAt: FieldValue.serverTimestamp(),
-    error: FieldValue.delete(),
-    updatedAt: FieldValue.serverTimestamp(),
-  });
+  // If even the retry fails, the action stays 'executing' and the next
+  // approval after the lease finishes it from the keyed effect.
+  await retryOnce(() =>
+    ref.update({
+      status: 'executed',
+      input: claimed.input,
+      result: done.result,
+      executedAt: FieldValue.serverTimestamp(),
+      error: FieldValue.delete(),
+      updatedAt: FieldValue.serverTimestamp(),
+    }),
+  );
   await appNote(
     db,
     args.threadId,
-    `[App update] ${args.caller.displayName} approved action ${args.actionId} (${claimed.type}): ${done.line}`,
+    `[App update] ${forNote(args.caller.displayName)} approved action ${args.actionId} (${claimed.type}): ${done.line}`,
   );
   return { status: 'executed', result: done.result };
 }
@@ -396,6 +539,6 @@ export async function rejectAction(
     tx.update(ref, { status: 'rejected', updatedAt: FieldValue.serverTimestamp() });
     return String(snap.get('type'));
   });
-  await appNote(db, threadId, `[App update] ${caller.displayName} rejected action ${actionId} (${type}).`);
+  await appNote(db, threadId, `[App update] ${forNote(caller.displayName)} rejected action ${actionId} (${type}).`);
   return { status: 'rejected' };
 }

@@ -7,6 +7,7 @@ import {
   finishTurn,
   loadHistory,
   startTurn,
+  StaleTurnError,
   toApiMessages,
   TURN_LEASE_MS,
   type StoredEntry,
@@ -110,6 +111,13 @@ describe('toApiMessages', () => {
     expect(out[out.length - 1].content).toEqual([toolResult('tu_1')]);
   });
 
+  it('never replays an empty assistant message (the API rejects one mid-history)', () => {
+    const blank: StoredEntry = { role: 'assistant', kind: 'assistant', content: '' };
+    const out = toApiMessages([u('Q1'), a(toolUse('tu_1')), r('tu_1'), a(), blank, u('Q2')]);
+    expect(out.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'user']);
+    expect(out.every((m) => (Array.isArray(m.content) ? m.content.length > 0 : m.content !== ''))).toBe(true);
+  });
+
   it('answers a tool call whose results were never stored (the run died), so the thread stays usable', () => {
     const out = toApiMessages([u('Q1'), a({ type: 'text', text: 'Looking' }, toolUse('tu_1'), toolUse('tu_2')), u('Q2')]);
     expect(out[2]).toEqual({
@@ -126,7 +134,7 @@ describe('toApiMessages', () => {
 describe('startTurn / finishTurn', () => {
   it('creates a thread titled from the message, with updatedAt equal to createdAt', async () => {
     const message = '  Hi Brandon,\n\nCan you set up an RSVP for the Nov 7 meeting and the workday after it so we can order food?';
-    const id = await startTurn(db, { caller, message, now: NOW });
+    const { threadId: id } = await startTurn(db, { caller, message, now: NOW });
     const t = (await db.doc(`assistantThreads/${id}`).get()).data()!;
     expect(t).toMatchObject({
       title: 'Hi Brandon, Can you set up an RSVP for the Nov 7 meeting and',
@@ -139,8 +147,10 @@ describe('startTurn / finishTurn', () => {
     expect((t.updatedAt as Timestamp).isEqual(t.createdAt)).toBe(true);
   });
 
-  it('continues an existing thread', async () => {
-    await expect(startTurn(db, { threadId: thread, caller, message: 'More', now: NOW })).resolves.toBe(thread);
+  it('continues an existing thread, with a fresh turn token', async () => {
+    const turn = await startTurn(db, { threadId: thread, caller, message: 'More', now: NOW });
+    expect(turn).toEqual({ threadId: thread, turnToken: expect.stringMatching(/^[\w-]{20,}$/) });
+    expect((await db.doc(`assistantThreads/${thread}`).get()).get('turnToken')).toBe(turn.turnToken);
   });
 
   it('rejects an unknown thread id as not-found', async () => {
@@ -163,26 +173,64 @@ describe('startTurn / finishTurn', () => {
       code: 'failed-precondition',
     });
     const later = new Date(NOW.getTime() + TURN_LEASE_MS + 1);
-    await expect(startTurn(db, { threadId: thread, caller, message: 'After a crash', now: later })).resolves.toBe(thread);
-    await finishTurn(db, thread, 'Here is the plan.');
-    await expect(startTurn(db, { threadId: thread, caller, message: 'Next', now: later })).resolves.toBe(thread);
+    const afterCrash = await startTurn(db, { threadId: thread, caller, message: 'After a crash', now: later });
+    expect(afterCrash.threadId).toBe(thread);
+    await finishTurn(db, { threadId: thread, turnToken: afterCrash.turnToken, reply: 'Here is the plan.' });
+    await expect(startTurn(db, { threadId: thread, caller, message: 'Next', now: later })).resolves.toMatchObject({
+      threadId: thread,
+    });
   });
 
   it('records the reply preview and frees the thread when a turn ends', async () => {
-    await startTurn(db, { threadId: thread, caller, message: 'Hi', now: NOW });
-    await finishTurn(db, thread, `Here's the plan:\n\n${'x'.repeat(300)}`);
+    const { turnToken } = await startTurn(db, { threadId: thread, caller, message: 'Hi', now: NOW });
+    await finishTurn(db, { threadId: thread, turnToken, reply: `Here's the plan:\n\n${'x'.repeat(300)}` });
     const t = (await db.doc(`assistantThreads/${thread}`).get()).data()!;
     expect(t.lastReplyPreview.startsWith("Here's the plan: xxx")).toBe(true);
     expect(t.lastReplyPreview.length).toBeLessThanOrEqual(160);
     expect(t.updatedAt).toBeInstanceOf(Timestamp);
     expect(t).not.toHaveProperty('turnStartedAt');
+    expect(t).not.toHaveProperty('turnToken');
   });
 
   it('frees the thread without a preview when a turn fails', async () => {
-    await startTurn(db, { threadId: thread, caller, message: 'Hi', now: NOW });
-    await finishTurn(db, thread);
+    const { turnToken } = await startTurn(db, { threadId: thread, caller, message: 'Hi', now: NOW });
+    await finishTurn(db, { threadId: thread, turnToken });
     const t = (await db.doc(`assistantThreads/${thread}`).get()).data()!;
     expect(t).not.toHaveProperty('lastReplyPreview');
     expect(t).not.toHaveProperty('turnStartedAt');
+  });
+});
+
+describe('turn fencing', () => {
+  const later = new Date(NOW.getTime() + TURN_LEASE_MS + 1);
+  const note = {
+    role: 'user' as const,
+    kind: 'app_note' as const,
+    content: [{ type: 'text', text: '[App update] approved' }],
+    display: { text: '[App update] approved' },
+  };
+
+  it('refuses appends from a turn that no longer holds the thread; app notes need no turn', async () => {
+    const stale = await startTurn(db, { threadId: thread, caller, message: 'First', now: NOW });
+    await expect(appendMessage(db, thread, userText('on time'), stale.turnToken)).resolves.toBe(0);
+    // Its lease lapsed and a newer turn took the thread.
+    const newer = await startTurn(db, { threadId: thread, caller, message: 'Second', now: later });
+    expect(newer.turnToken).not.toBe(stale.turnToken);
+    await expect(appendMessage(db, thread, userText('too late'), stale.turnToken)).rejects.toBeInstanceOf(StaleTurnError);
+    await expect(appendMessage(db, thread, userText('current'), newer.turnToken)).resolves.toBe(1);
+    await expect(appendMessage(db, thread, note)).resolves.toBe(2);
+  });
+
+  it("a stale turn's finish leaves the newer turn's claim and preview alone", async () => {
+    const stale = await startTurn(db, { threadId: thread, caller, message: 'First', now: NOW });
+    const newer = await startTurn(db, { threadId: thread, caller, message: 'Second', now: later });
+    await finishTurn(db, { threadId: thread, turnToken: stale.turnToken, reply: 'Late reply' });
+    let t = (await db.doc(`assistantThreads/${thread}`).get()).data()!;
+    expect(t.turnToken).toBe(newer.turnToken);
+    expect(t).not.toHaveProperty('lastReplyPreview');
+    await finishTurn(db, { threadId: thread, turnToken: newer.turnToken, reply: 'Current reply' });
+    t = (await db.doc(`assistantThreads/${thread}`).get()).data()!;
+    expect(t).not.toHaveProperty('turnToken');
+    expect(t.lastReplyPreview).toBe('Current reply');
   });
 });

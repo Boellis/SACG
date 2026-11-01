@@ -1,4 +1,4 @@
-import Anthropic, { APIError, AuthenticationError, RateLimitError } from '@anthropic-ai/sdk';
+import Anthropic, { APIError, AuthenticationError, BadRequestError, RateLimitError } from '@anthropic-ai/sdk';
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { logger } from 'firebase-functions/v2';
 import { getFirestore, type Firestore } from 'firebase-admin/firestore';
@@ -31,12 +31,15 @@ export interface ChatDeps {
   now?: () => Date;
 }
 
+/** The deployed model client: each call carries runTurn's per-call timeout, retry limit and abort signal. */
+export function anthropicCreateMessage(apiKey: string): CreateMessage {
+  const client = new Anthropic({ apiKey });
+  return (params, options) => client.beta.messages.create(params, options);
+}
+
 const defaultChatDeps: ChatDeps = {
   getApiKey: () => getAnthropicApiKey(),
-  createMessageFor: (apiKey) => {
-    const client = new Anthropic({ apiKey });
-    return (params) => client.beta.messages.create(params);
-  },
+  createMessageFor: anthropicCreateMessage,
 };
 
 /** Anthropic API failures as answers the admin can act on. */
@@ -51,6 +54,13 @@ function fromAnthropic(err: unknown): unknown {
   }
   if (err instanceof RateLimitError) {
     return new HttpsError('resource-exhausted', 'The AI service is busy right now. Wait a minute, then send your message again.');
+  }
+  if (err instanceof BadRequestError) {
+    // Retrying the same conversation would fail the same way (and use up turns).
+    return new HttpsError(
+      'failed-precondition',
+      "The AI service couldn't continue this conversation. Start a new conversation; this one stays in your list.",
+    );
   }
   return new HttpsError('unavailable', "The AI service didn't answer. Please try again in a minute.");
 }
@@ -80,17 +90,20 @@ export async function handleAssistantChat(
   if (!apiKey) throw new HttpsError('failed-precondition', NOT_SET_UP);
   const now = deps.now ?? (() => new Date());
   const usage = await consumeTurn(db, caller.uid, now());
-  const threadId = await startTurn(db, { threadId: requested, caller, message, now: now() });
+  const { threadId, turnToken } = await startTurn(db, { threadId: requested, caller, message, now: now() });
 
   let reply: string | undefined;
   try {
-    const turn = await runTurn({ db, createMessage: deps.createMessageFor(apiKey), now }, { threadId, caller, userText: message });
+    const turn = await runTurn(
+      { db, createMessage: deps.createMessageFor(apiKey), now },
+      { threadId, caller, userText: message, turnToken },
+    );
     reply = turn.reply;
     return { threadId, reply: turn.reply, actionIds: turn.actionIds, usage };
   } catch (err) {
     throw fromAnthropic(err);
   } finally {
-    await finishTurn(db, threadId, reply).catch((err) =>
+    await finishTurn(db, { threadId, turnToken, reply }).catch((err) =>
       logger.error('assistantChat: could not finish the turn', { threadId, error: String(err) }),
     );
   }

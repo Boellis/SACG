@@ -6,6 +6,7 @@ import type { AdminCaller } from '../lib/auth';
 import { AudienceSchema, DocIdSchema, describeAudience, resolveAudience } from '../email/audience';
 import { EMAIL_JOBS } from '../email/jobs';
 import { GARDEN_TZ, formatGardenDate, formatGardenWhen, gardenToday, parseGardenLocal, toGardenLocal } from '../lib/time';
+import { hideContactDetails, neutralizeAppMarkers } from './redact';
 import { GardenDateSchema, describeIssues } from './schemas';
 
 export interface ReadToolContext {
@@ -32,11 +33,9 @@ function parse<T extends z.ZodType>(tool: string, schema: T, input: unknown): z.
 }
 
 // Member and admin free text (RSVP notes, descriptions, names) can hold contact
-// details. Structured email/phone fields are never read into a result, and these
-// patterns hide anything that looks like one inside text.
-const EMAIL_IN_TEXT = /[^\s@(<"']+@[^\s@)>"',;]+/g;
-const PHONE_IN_TEXT = /(?<!\d)(?:\+?1[ .-]?)?(?:\(\d{3}\)[ .-]?|\d{3}[ .-])?\d{3}[ .-]\d{4}(?!\d)/g;
-const scrub = (s: string) => s.replace(EMAIL_IN_TEXT, '[email hidden]').replace(PHONE_IN_TEXT, '[phone hidden]');
+// details (structured email/phone fields are never read into a result) or an
+// app marker posing as the app.
+const scrub = (s: string) => hideContactDetails(neutralizeAppMarkers(s));
 
 const textOf = (v: unknown) => (typeof v === 'string' ? scrub(v.trim()) : '');
 const clip = (s: string, max: number) => (s.length > max ? `${s.slice(0, max - 1)}…` : s);
@@ -107,7 +106,7 @@ async function getGardenInfo(db: Firestore, input: unknown, ctx: ReadToolContext
     now: toGardenLocal(ctx.now),
     appUrl: APP_URL,
     pages: { calendar: `${APP_URL}/calendar`, polls: `${APP_URL}/polls`, lounge: `${APP_URL}/lounge` },
-    admin: ctx.caller.displayName,
+    admin: scrub(ctx.caller.displayName),
     settings,
   };
 }
