@@ -1,0 +1,166 @@
+# CI for the dev / test / prod branches. It also runs as a reusable workflow, called
+# by deploy-test.yml and deploy-prod.yml before they deploy anything.
+#
+# The job ids below (build-and-test, functions, firestore-rules, security-scan,
+# bundle-scan, promotion-guard) are the names branch protection on `test` and `prod`
+# requires. Renaming one silently un-protects those branches: change them together
+# with the branch-protection settings.
+name: CI
+
+on:
+  pull_request:
+    branches: [dev, test, prod]
+  push:
+    branches: [dev, test, prod]
+  workflow_call: {}
+
+permissions:
+  contents: read
+
+# Superseded PR runs are cancelled; pushes (and the deploy workflows' calls into this
+# file) are queued, never cancelled mid-flight. The calling workflow's name is part of
+# the key so a push-triggered run and a deploy workflow's reusable call on the same ref
+# can't replace each other while pending.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build-and-test:
+    name: build-and-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - name: Keep the build for bundle-scan
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist
+          if-no-files-found: error
+          retention-days: 7
+
+  functions:
+    name: functions
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: functions/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      # The functions `test` script runs `firebase emulators:exec`.
+      - run: npm i -g firebase-tools@14.9.0
+      - name: Install, build and test
+        working-directory: functions
+        run: |
+          npm ci
+          npm run build
+          npm test
+
+  firestore-rules:
+    name: firestore-rules
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: npm i -g firebase-tools@14.9.0
+      - run: npm ci
+      - run: npm run test:rules
+
+  # The repo is public: nothing here installs project dependencies, so none of the
+  # project's own install scripts run next to the history scan.
+  security-scan:
+    name: security-scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GITLEAKS_VERSION: 8.30.1
+      # sha256 of the linux_x64 tarball for the version above (from the release's
+      # gitleaks_<version>_checksums.txt). Bump both together.
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # gitleaks scans the full history
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install gitleaks (checksum-verified)
+        run: |
+          set -euo pipefail
+          release="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          cd "$RUNNER_TEMP"
+          curl -sSfL -o "$archive" "${release}/${archive}"
+          curl -sSfL -o checksums.txt "${release}/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          # against the release's published checksums, and against the value pinned above
+          grep " ${archive}\$" checksums.txt | sha256sum --check --strict -
+          echo "${GITLEAKS_SHA256}  ${archive}" | sha256sum --check --strict -
+          mkdir gitleaks-bin
+          tar -xzf "$archive" -C gitleaks-bin gitleaks
+          echo "$RUNNER_TEMP/gitleaks-bin" >> "$GITHUB_PATH"
+      - name: Secret scan, full git history
+        run: gitleaks git --redact --config .gitleaks.toml --verbose
+      - name: Secret, member-data and forbidden-file scan of tracked files
+        run: npm run security:scan
+      - name: Dependency audit, app
+        run: npm audit --omit=dev --audit-level=high
+      - name: Dependency audit, functions
+        working-directory: functions
+        run: npm audit --omit=dev --audit-level=high
+
+  bundle-scan:
+    name: bundle-scan
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - run: node scripts/security/scan-dist.mjs dist
+
+  promotion-guard:
+    name: promotion-guard
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check the PR follows dev -> test -> prod
+        # Branch names are attacker-controlled on PRs from forks: pass them through the
+        # environment, never interpolate expression values into the script text.
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: node scripts/ci/promotion-guard.mjs "$BASE_REF" "$HEAD_REF"
