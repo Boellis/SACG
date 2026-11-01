@@ -70,7 +70,7 @@ When production is broken and the normal flow is too slow:
 
 The garden's roster is real people's names, emails and phone numbers. Real member data lives **only in Firestore**.
 
-- Never commit rosters or exports (`members_list*.txt`, CSV/XLSX, backups, generated reports), service-account JSON, `.env.local`, API keys or private keys. They are gitignored, and `npm run security:scan` and gitleaks reject them if one slips through.
+- Never commit rosters or exports (`members_list*.txt`, CSV/XLSX, backups, generated reports), service-account JSON, `.env.local`, API keys or private keys. They are gitignored. If one slips through, CI rejects it: `npm run security:scan` flags those files by name and any member email address or phone number in tracked files, and gitleaks flags secrets such as keys and tokens. gitleaks has no rules for member data, so the repo scanner is what catches a roster.
 - In tests, docs and seed data use obviously fake values: `@example.com` addresses, `555-` phone numbers, invented names.
 - The scanners allow only: the garden's own address, the public Firebase web API key, and fake or test values. **If a check flags something, treat it as real.** Don't widen an allowlist (`scripts/security/patterns.mjs`, `.gitleaks.toml`) to make a failure go away; ask Brandon.
 - **If you already pushed something sensitive**, tell Brandon right away. Deleting it in a later commit does not remove it from history; credentials must be rotated and history rewritten.
@@ -89,7 +89,7 @@ npm run emulators         # Auth + Firestore + Hosting emulators (see README)
 
 ## Maintainer notes
 
-- **Credentials are keyless.** GitHub Actions authenticates to Google Cloud through Workload Identity Federation; no key is stored anywhere. Each GitHub environment (`test`, `production`) has its own variables `GCP_WIF_PROVIDER` and `GCP_DEPLOY_SA` (a different service account per environment), and each environment only accepts deploys from its own branch.
+- **Credentials are keyless.** GitHub Actions authenticates to Google Cloud through Workload Identity Federation; no key is stored anywhere. The identity provider is the repository variable `GCP_WIF_PROVIDER`, shared by both environments. Each GitHub environment (`test`, `production`) sets its own `GCP_DEPLOY_SA` (a different service account per environment), and each environment only accepts deploys from its own branch.
 - **First rollout only.** The preview is deployed before the callable functions exist in production. Until the first `prod` deploy has gone out, set the repository variable `SMOKE_SKIP_FUNCTIONS` to `true` so the preview's smoke checks skip the callable probes, then **delete the variable**. `prod` always checks them.
 - **Never deploy `extensions` from CI.** It would drop the SMTP secret wiring of the Trigger Email extension. The deploy target list in `deploy-prod.yml` is deliberate, and a test (`scripts/ci/workflows.test.mjs`) fails if `extensions` appears.
 - **Dependency overrides.** `package.json` pins `undici` and `@grpc/grpc-js` through `overrides`. Firebase 10.14.1 (the last v10 release) pins vulnerable versions of both, and `npm audit` gates CI. Neither ships to browsers (they only run under Node: the seed script and the rules tests). Remove the overrides when the app moves to a newer Firebase SDK.

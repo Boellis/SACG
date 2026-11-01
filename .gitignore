@@ -15,10 +15,16 @@ build/
 member-cleanup/serviceAccount.json
 member-cleanup/report-*.json
 
-# This repo is PUBLIC: never commit member data or credentials. These patterns are
-# enforced again in CI by scripts/security/scan-repo.mjs and gitleaks.
+# This repo is PUBLIC: never commit member data or credentials. In CI,
+# scripts/security/scan-repo.mjs rejects most of these by name as well
+# (FORBIDDEN_PATHS in scripts/security/patterns.mjs), plus any member email or
+# phone number in tracked files; gitleaks only looks for secrets.
 members_list*.txt
 *.roster.*
+# Roster exports (the scanner tests may keep csv fixtures)
+*.csv
+!scripts/security/fixtures/**/*.csv
+*.xlsx
 backup-*.json
 report-*.json
 **/serviceAccount*.json
@@ -52,3 +58,6 @@ Thumbs.db
 
 # Brainstorming visual companion (local only)
 .superpowers/
+
+# Agent worktrees nested in the checkout
+.claude/worktrees/

@@ -9,6 +9,7 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./test/setup.ts'],
     // functions/ has its own vitest config + emulator harness (`cd functions && npm test`).
-    exclude: ['**/node_modules/**', '**/dist/**', 'test/rules/**', 'functions/**'],
+    // .claude/ holds agent worktrees nested in the checkout: other copies of this repo, not tests of this one.
+    exclude: ['**/node_modules/**', '**/dist/**', 'test/rules/**', 'functions/**', '.claude/**'],
   },
 });
