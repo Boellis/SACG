@@ -132,9 +132,9 @@ describe('deploy-prod.yml', () => {
   it('passes --force only on a manual run that explicitly asks for it, never on a push', () => {
     expect(text).toContain("FORCE_FLAG: ${{ github.event_name == 'workflow_dispatch' && inputs.force && '--force' || '' }}");
     expect(text).toMatch(/      force:\n        description: [\s\S]*?\n        type: boolean\n        default: false\n/);
-    // no run line hard-codes the flag: it can only arrive through FORCE_FLAG
-    const runLines = text.split('\n').filter((l) => /^\s*run: /.test(l));
-    expect(runLines.some((l) => l.includes('--force'))).toBe(false);
+    // nothing hard-codes the flag (single-line or block run:): it can only arrive through FORCE_FLAG
+    const withoutDescription = text.replace(/        description: >-\n[\s\S]*?\n        type: boolean/, '');
+    expect(withoutDescription.split('--force').length - 1).toBe(1);
   });
 
   it('gates on CI and runs in the production environment with keyless auth', () => {
@@ -187,7 +187,12 @@ describe('deploy-prod.yml', () => {
     expect(iCheck).toBeGreaterThan(-1);
     expect(rollback.indexOf('exit 0')).toBeGreaterThan(iCheck);
     // the check reads the live channel again, and runs before the clone
+    expect(rollback.indexOf('channels/live')).toBeGreaterThan(-1);
     expect(rollback.indexOf('channels/live')).toBeLessThan(iCheck);
+    expect(rollback).toContain('current=$(');
+    // a failed re-read must fall through to the clone (roll back), not abort under set -e
+    expect(rollback).toMatch(/\) \|\| live=""\n/);
+    expect(rollback).toMatch(/\) \|\| current=""\n/);
     expect(iCheck).toBeLessThan(rollback.indexOf('hosting:clone'));
     expect(rollback).toContain('TOKEN: ${{ steps.auth.outputs.access_token }}');
   });
