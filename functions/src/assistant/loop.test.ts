@@ -572,6 +572,10 @@ describe('prompt', () => {
       // Contact details in what the admin types or pastes are hidden; the admin adds them on the card.
       /\[email hidden\] or \[phone hidden\]/,
       /editing the draft card/,
+      // An RSVP links one event: back-to-back events become one, or the email names the one it counts.
+      /back-to-back events/,
+      /one combined calendar event/,
+      /say which event the RSVP is for in the email's summary/,
     ]) {
       expect(SYSTEM_PROMPT).toMatch(rule);
     }
