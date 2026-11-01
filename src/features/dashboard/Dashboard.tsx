@@ -98,6 +98,13 @@ function AdminDashboard({ displayName }: { displayName: string }) {
           </Link>
         </Card>
 
+        <Card title="AI Assistant">
+          <p className="text-sm text-gray-500">Paste a member's request; it drafts the email, calendar event and RSVP for you to approve.</p>
+          <Link to="/assistant">
+            <Button variant="secondary" className="mt-4 w-full">Open Assistant →</Button>
+          </Link>
+        </Card>
+
       </div>
     </div>
   );
