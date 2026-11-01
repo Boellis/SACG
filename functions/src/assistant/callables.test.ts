@@ -5,7 +5,15 @@ import { logger } from 'firebase-functions/v2';
 import { APIConnectionError, AuthenticationError, InternalServerError, RateLimitError } from '@anthropic-ai/sdk';
 import type { BetaMessage } from '@anthropic-ai/sdk/resources/beta/messages/messages';
 import { testDb, clearFirestore } from '../testing/emulator';
-import { assistantChat, handleAssistantChat, NOT_SET_UP, type ChatDeps } from './callables';
+import { recordProposal } from './actions';
+import {
+  assistantChat,
+  assistantExecuteAction,
+  assistantRejectAction,
+  handleAssistantChat,
+  NOT_SET_UP,
+  type ChatDeps,
+} from './callables';
 import type { CreateMessage } from './loop';
 
 // Callables must never reach Secret Manager or Anthropic in tests: every path
@@ -175,5 +183,59 @@ describe('handleAssistantChat', () => {
     } finally {
       logged.mockRestore();
     }
+  });
+});
+
+describe('assistantExecuteAction / assistantRejectAction', () => {
+  const call = (fn: typeof assistantExecuteAction | typeof assistantRejectAction, data: unknown, uid?: string) =>
+    fn.run({ data, auth: uid ? { uid, token: {} } : undefined, rawRequest: {} } as unknown as CallableRequest);
+
+  let actionId: string;
+  beforeEach(async () => {
+    await db.doc('assistantThreads/T1').set({ title: 'Nov 7', messageCount: 0, updatedAt: Timestamp.fromDate(NOW) });
+    actionId = await recordProposal(db, 'T1', {
+      type: 'create_event',
+      input: { title: 'Workday', type: 'workday', start: '2099-03-07T09:00', end: '2099-03-07T12:00', allDay: false },
+      summary: 'Workday',
+      toolUseId: 'tu_1',
+    });
+  });
+
+  it.each([
+    ['assistantExecuteAction', assistantExecuteAction],
+    ['assistantRejectAction', assistantRejectAction],
+  ])('%s answers an anonymous empty call with unauthenticated, and a member with permission-denied', async (_n, fn) => {
+    await expect(call(fn, {})).rejects.toMatchObject({ code: 'unauthenticated' });
+    await expect(call(fn, {}, 'm-denny')).rejects.toMatchObject({ code: 'permission-denied' });
+    await expect(call(fn, { threadId: 'T1', actionId, mode: 'run' }, 'm-denny')).rejects.toMatchObject({
+      code: 'permission-denied',
+    });
+    expect((await db.doc(`assistantThreads/T1/actions/${actionId}`).get()).get('status')).toBe('proposed');
+  });
+
+  it.each([
+    ['no action id', { threadId: 'T1', mode: 'run' }],
+    ['an unknown mode', { threadId: 'T1', actionId: 'A', mode: 'later' }],
+    ['a path-like id', { threadId: 'T1/x', actionId: 'A', mode: 'run' }],
+    ['non-object overrides', { threadId: 'T1', actionId: 'A', mode: 'run', overrides: 'all' }],
+    ['an extra field', { threadId: 'T1', actionId: 'A', mode: 'run', force: true }],
+  ])('assistantExecuteAction rejects %s as invalid-argument', async (_label, data) => {
+    await expect(call(assistantExecuteAction, data, 'admin1')).rejects.toMatchObject({ code: 'invalid-argument' });
+  });
+
+  it('assistantRejectAction takes exactly {threadId, actionId}', async () => {
+    await expect(call(assistantRejectAction, { threadId: 'T1' }, 'admin1')).rejects.toMatchObject({ code: 'invalid-argument' });
+    await expect(call(assistantRejectAction, { threadId: 'T1', actionId, reason: 'no' }, 'admin1')).rejects.toMatchObject({
+      code: 'invalid-argument',
+    });
+    await expect(call(assistantRejectAction, { threadId: 'T1', actionId }, 'admin1')).resolves.toEqual({ status: 'rejected' });
+  });
+
+  it('assistantExecuteAction runs an approved action for an admin', async () => {
+    await expect(call(assistantExecuteAction, { threadId: 'T1', actionId, mode: 'run' }, 'admin1')).resolves.toMatchObject({
+      status: 'executed',
+      result: { title: 'Workday', when: 'Saturday, March 7, 2099, 9:00 AM–12:00 PM' },
+    });
+    expect(assistantExecuteAction.__endpoint).toMatchObject({ region: ['us-central1'], timeoutSeconds: 60 });
   });
 });

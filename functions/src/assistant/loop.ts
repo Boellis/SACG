@@ -52,6 +52,9 @@ export function buildRequest(messages: BetaMessageParam[]): MessageCreateParamsN
 }
 
 const isToolUse = (b: BetaContentBlock): b is BetaToolUseBlock => b.type === 'tool_use';
+// Own keys only: a model-chosen name like "constructor" must not match Object.prototype.
+const has = (record: object, key: string) => Object.prototype.hasOwnProperty.call(record, key);
+const labelOf = (name: string) => (has(TOOL_LABELS, name) ? TOOL_LABELS[name] : name);
 const textOf = (content: BetaContentBlock[]) =>
   content
     .filter((b): b is Extract<BetaContentBlock, { type: 'text' }> => b.type === 'text')
@@ -118,7 +121,7 @@ async function runTool(ctx: ToolContext, block: BetaToolUseBlock): Promise<{ res
       const text = await runReadTool(ctx.db, block.name, block.input, { caller: ctx.caller, now: ctx.now });
       return { result: result(block.id, text, isErrorJson(text)) };
     }
-    if (block.name in PROPOSE_TOOL_ACTION) return await propose(ctx, block);
+    if (has(PROPOSE_TOOL_ACTION, block.name)) return await propose(ctx, block);
     return { result: result(block.id, `There is no tool called ${block.name}.`, true) };
   } catch (err) {
     if (err instanceof ProposalError) return { result: result(block.id, `Nothing was saved: ${err.message}`, true) };
@@ -178,7 +181,7 @@ export async function runTurn(
       role: 'assistant',
       kind: 'assistant',
       content: response.content,
-      display: { text: reply, tools: toolUses.map((t) => ({ name: t.name, label: TOOL_LABELS[t.name] ?? t.name })) },
+      display: { text: reply, tools: toolUses.map((t) => ({ name: t.name, label: labelOf(t.name) })) },
     });
 
     const truncated = response.stop_reason === 'max_tokens';

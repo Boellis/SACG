@@ -320,6 +320,7 @@ describe('runTurn', () => {
             toolUse('tu_2', 'list_events', { from: 'soon', to: 'later' }),
             toolUse('tu_3', 'propose_email', { ...RSVP_EMAIL, rsvp: { eventActionId: 'no-such-action' }, summary: 'x' }),
             toolUse('tu_4', 'propose_calendar_event', { ...DENNY_MEETING }),
+            toolUse('tu_5', 'constructor', {}),
           ],
           'tool_use',
         ),
@@ -332,9 +333,12 @@ describe('runTurn', () => {
       ['tu_2', true],
       ['tu_3', true],
       ['tu_4', true],
+      ['tu_5', true],
     ]);
     expect(results[2].content).toMatch(/no-such-action/);
     expect(results[3].content).toMatch(/summary/);
+    expect(results[4].content).toBe('There is no tool called constructor.');
+    expect((await stored())[1].display.tools[4]).toEqual({ name: 'constructor', label: 'constructor' });
     expect(await count(`assistantThreads/${THREAD}/actions`)).toBe(0);
   });
 

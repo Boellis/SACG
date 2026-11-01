@@ -7,6 +7,7 @@ import { REGION } from '../config';
 import { DocIdSchema } from '../email/audience';
 import { requireAdmin } from '../lib/auth';
 import { withPublicErrors } from '../lib/publicErrors';
+import { executeAction, rejectAction } from './actions';
 import { getAnthropicApiKey } from './apiKey';
 import { MAX_MESSAGE_CHARS } from './config';
 import { finishTurn, startTurn } from './history';
@@ -98,4 +99,38 @@ export async function handleAssistantChat(
 /** Admin-only: one message to the assistant (Claude tool-use loop; proposals only). */
 export const assistantChat = onCall({ region: REGION, timeoutSeconds: 300, memory: '512MiB' }, (request) =>
   withPublicErrors('assistantChat', () => handleAssistantChat(getFirestore(), request.auth, request.data)),
+);
+
+const ExecuteInput = z
+  .object({
+    threadId: DocIdSchema,
+    actionId: DocIdSchema,
+    mode: z.enum(['run', 'test']),
+    overrides: z.record(z.string(), z.unknown()).optional(),
+    testMemberId: DocIdSchema.optional(),
+  })
+  .strict();
+
+const RejectInput = z.object({ threadId: DocIdSchema, actionId: DocIdSchema }).strict();
+
+/** Admin-only: approve a proposal (`run`), or test-send a proposed email to one member (`test`). */
+export const assistantExecuteAction = onCall({ region: REGION, timeoutSeconds: 60 }, (request) =>
+  withPublicErrors('assistantExecuteAction', async () => {
+    const db = getFirestore();
+    const caller = await requireAdmin(db, request.auth);
+    const parsed = ExecuteInput.safeParse(request.data);
+    if (!parsed.success) throw new HttpsError('invalid-argument', "That approval request isn't valid.");
+    return executeAction(db, { ...parsed.data, caller });
+  }),
+);
+
+/** Admin-only: reject a proposal. */
+export const assistantRejectAction = onCall({ region: REGION }, (request) =>
+  withPublicErrors('assistantRejectAction', async () => {
+    const db = getFirestore();
+    const caller = await requireAdmin(db, request.auth);
+    const parsed = RejectInput.safeParse(request.data);
+    if (!parsed.success) throw new HttpsError('invalid-argument', "That request isn't valid.");
+    return rejectAction(db, { ...parsed.data, caller });
+  }),
 );

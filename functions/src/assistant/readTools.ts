@@ -159,7 +159,7 @@ async function getEventRsvps(db: Firestore, input: unknown): Promise<Json> {
     db.collection('members').where('status', '==', 'active').get(),
   ]);
   if (!event.exists) throw new ToolInputError(`There is no event with id ${eventId}. Use list_events to find event ids.`);
-  const rsvps = rsvpSnap.docs.filter((r) => r.get('status') in RSVP_ORDER);
+  const rsvps = rsvpSnap.docs.filter((r) => Object.prototype.hasOwnProperty.call(RSVP_ORDER, String(r.get('status'))));
   const answered = new Set(rsvps.map((r) => r.id));
   const responses = rsvps
     .map((r) => {
@@ -242,7 +242,7 @@ const HANDLERS: Record<string, (db: Firestore, input: unknown, ctx: ReadToolCont
  * anything unexpected is thrown for the tool loop to report.
  */
 export async function runReadTool(db: Firestore, name: string, input: unknown, ctx: ReadToolContext): Promise<string> {
-  const handler = HANDLERS[name];
+  const handler = Object.prototype.hasOwnProperty.call(HANDLERS, name) ? HANDLERS[name] : undefined;
   if (!handler) return JSON.stringify({ error: `There is no read tool called ${name}.` });
   try {
     return JSON.stringify(await handler(db, input, ctx));

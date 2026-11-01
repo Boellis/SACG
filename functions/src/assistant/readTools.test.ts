@@ -264,7 +264,8 @@ describe('every read tool', () => {
     expect(text).not.toMatch(/555-010/);
   });
 
-  it('answers an unknown tool name with an error', async () => {
+  it('answers an unknown tool name with an error, including names inherited from Object', async () => {
     expect((await run('delete_everything', {})).error).toEqual(expect.any(String));
+    expect((await run('toString', {})).error).toEqual(expect.any(String));
   });
 });
