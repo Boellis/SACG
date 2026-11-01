@@ -1,9 +1,10 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useAuth } from '../../auth/useAuth';
 import { Button } from '../../components/ui';
 import { formatGardenDate } from '../../lib/gardenTime';
 import { listenMembers } from '../members/membersApi';
 import ActionCard from './ActionCard';
+import { ActionCallsContext } from './ActionShell';
 import { listenThreadActions, listenThreadMessages, listenThreads, sendAssistantMessage } from './assistantApi';
 import ChatMessage from './ChatMessage';
 import { errorText } from './errors';
@@ -50,6 +51,7 @@ export default function AssistantPage() {
   const [error, setError] = useState('');
   const [usage, setUsage] = useState<ChatUsage | null>(null);
   const [pending, setPending] = useState<Pending | null>(null);
+  const [cardCalls, setCardCalls] = useState(0); // approve / test / reject calls running on the cards
 
   const sending = useRef(false); // blocks a double send before `busy` re-renders
   const boxRef = useRef<HTMLTextAreaElement>(null);
@@ -84,12 +86,23 @@ export default function AssistantPage() {
 
   const placement = useMemo(() => placeActions(messages ?? [], actions ?? []), [messages, actions]);
 
+  const cardCallTracker = useMemo(
+    () => ({
+      begin: () => setCardCalls((n) => n + 1),
+      end: () => setCardCalls((n) => Math.max(0, n - 1)),
+    }),
+    [],
+  );
+
   const loading = activeId !== null && !loadFailed && (messages === null || actions === null);
   const showPending = pending !== null && !(messages && messages.length > pending.baseCount);
   const tooLong = draft.length > MAX_MESSAGE_CHARS;
+  // Not while an assistant turn or a card's call is running: leaving would unmount the cards and drop the
+  // state that stops a running call being sent again.
+  const switchLocked = busy || cardCalls > 0;
 
   function openThread(id: string | null) {
-    if (busy) return;
+    if (switchLocked) return;
     setActiveId(id);
     setPending(null);
     setError('');
@@ -124,27 +137,37 @@ export default function AssistantPage() {
     }
   }
 
-  // The cards need the member list (recipient counts, the test-send picker) and who I am.
-  const renderActions = (list: AssistantAction[] | undefined) =>
-    activeId && members && me
-      ? list?.map((action) => (
-          <ActionCard
-            key={action.id}
-            threadId={activeId}
-            action={action}
-            members={members}
-            me={me}
-            actions={actions ?? []}
-          />
-        ))
-      : null;
+  // The conversation is ONE flat list of keyed items: every message (`m-…`) and every card (`a-…`) is a direct
+  // child of the same container. A card keeps its identity, and with it its open edit, its call in flight and
+  // its test sends, however the list around it changes: new messages, a later turn, or its own message
+  // arriving after it. Nest a card inside its message and it is rebuilt whenever it changes parents.
+  const log: ReactNode[] = [];
+  if (messages) {
+    // The cards need the member list (recipient counts, the test-send picker) and who I am.
+    const card = (action: AssistantAction) =>
+      activeId && members && me ? (
+        <ActionCard
+          key={`a-${action.id}`}
+          threadId={activeId}
+          action={action}
+          members={members}
+          me={me}
+          actions={actions ?? []}
+        />
+      ) : null;
+    for (const message of messages) {
+      log.push(<ChatMessage key={`m-${message.id}`} message={message} meUid={me?.id} />);
+      for (const action of placement.after.get(message.id) ?? []) log.push(card(action));
+    }
+    for (const action of placement.unplaced) log.push(card(action));
+  }
 
-  return (
+  const page = (
     <div className="flex flex-col gap-4 md:h-[calc(100vh-6.5rem)] md:flex-row">
       <h1 className="sr-only">AI Assistant</h1>
 
       <aside className="flex max-h-56 w-full shrink-0 flex-col gap-2 rounded-2xl border border-gray-100 bg-white p-3 shadow-sm md:max-h-none md:w-64">
-        <Button variant="secondary" className="w-full" disabled={busy} onClick={() => openThread(null)}>
+        <Button variant="secondary" className="w-full" disabled={switchLocked} onClick={() => openThread(null)}>
           New conversation
         </Button>
         <nav aria-label="Conversations" className="min-h-0 flex-1 overflow-y-auto">
@@ -161,7 +184,7 @@ export default function AssistantPage() {
                 <li key={thread.id}>
                   <button
                     type="button"
-                    disabled={busy}
+                    disabled={switchLocked}
                     aria-current={thread.id === activeId ? 'true' : undefined}
                     onClick={() => openThread(thread.id)}
                     className={`w-full rounded-lg px-3 py-2 text-left transition-colors disabled:opacity-60 ${
@@ -197,13 +220,7 @@ export default function AssistantPage() {
           )}
           {messages?.length === 0 && !showPending && <p className="text-sm text-gray-500">No messages yet.</p>}
 
-          {messages?.map((message) => (
-            <Fragment key={message.id}>
-              <ChatMessage message={message} meUid={me?.id} />
-              {renderActions(placement.after.get(message.id))}
-            </Fragment>
-          ))}
-          {messages && renderActions(placement.unplaced)}
+          {log}
 
           {showPending && pending && (
             <ChatMessage
@@ -269,4 +286,6 @@ export default function AssistantPage() {
       </section>
     </div>
   );
+
+  return <ActionCallsContext.Provider value={cardCallTracker}>{page}</ActionCallsContext.Provider>;
 }

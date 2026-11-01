@@ -1,4 +1,13 @@
-import { useId, useRef, useState, type ComponentProps, type ReactNode, type TextareaHTMLAttributes } from 'react';
+import {
+  createContext,
+  useContext,
+  useId,
+  useRef,
+  useState,
+  type ComponentProps,
+  type ReactNode,
+  type TextareaHTMLAttributes,
+} from 'react';
 import { Badge, Button, Field } from '../../components/ui';
 import { executeAssistantAction, rejectAssistantAction } from './assistantApi';
 import { errorText } from './errors';
@@ -36,12 +45,26 @@ export interface ActionRunner {
 }
 
 /**
+ * Lets the page know while any card has a call in flight. A card keeps its
+ * "in flight" and "locked" state in itself, so it must stay mounted until the
+ * call is over: the page uses this to keep the admin in the conversation
+ * meanwhile (switching away would unmount the card and forget the call, and
+ * coming back its buttons would work again).
+ */
+export interface ActionCalls {
+  begin: () => void;
+  end: () => void;
+}
+export const ActionCallsContext = createContext<ActionCalls | null>(null);
+
+/**
  * Calls for one action. Only one is ever in flight (a double click is ignored
  * before React re-renders), and after a successful run or reject the card stays
  * locked until the server's status arrives, so the same action can't be sent
  * twice. The server enforces that too; this keeps the UI from asking.
  */
 export function useActionRunner(threadId: string, actionId: string): ActionRunner {
+  const calls = useContext(ActionCallsContext);
   const [busy, setBusy] = useState(false);
   const [locked, setLocked] = useState(false);
   const [error, setError] = useState('');
@@ -50,6 +73,7 @@ export function useActionRunner(threadId: string, actionId: string): ActionRunne
   async function guarded<T>(call: () => Promise<T>, lockOnSuccess: boolean, failure: string): Promise<T | null> {
     if (inFlight.current) return null;
     inFlight.current = true;
+    calls?.begin();
     setBusy(true);
     setError('');
     try {
@@ -61,6 +85,7 @@ export function useActionRunner(threadId: string, actionId: string): ActionRunne
       return null;
     } finally {
       inFlight.current = false;
+      calls?.end();
       setBusy(false);
     }
   }

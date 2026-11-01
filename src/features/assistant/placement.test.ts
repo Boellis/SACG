@@ -50,7 +50,7 @@ describe('toolUseIds', () => {
 });
 
 describe('placeActions', () => {
-  it("puts a turn's proposals after the assistant's closing message for that turn", () => {
+  it('puts a proposal right after the assistant message that made it, not after the turn\'s closing message', () => {
     n = 0;
     const user = msg('user_text');
     const proposing = msg('assistant', [toolUse('toolu_1'), toolUse('toolu_2')]);
@@ -61,32 +61,65 @@ describe('placeActions', () => {
 
     const { after, unplaced } = placeActions([user, proposing, results, closing], [a1, a2]);
 
-    expect(after.get(closing.id)).toEqual([a1, a2]);
-    expect(after.has(proposing.id)).toBe(false);
+    expect(after.get(proposing.id)).toEqual([a1, a2]);
+    expect(after.has(closing.id)).toBe(false);
     expect(unplaced).toEqual([]);
   });
 
-  it('keeps each turn separate and ignores approval notes between turns', () => {
+  it('gives each proposal the message that made it, across calls and turns', () => {
     n = 0;
-    const turn1 = [msg('user_text'), msg('assistant', [toolUse('toolu_1')]), msg('tool_results'), msg('assistant', [textBlock('one')])];
-    const note = msg('app_note');
-    const turn2 = [msg('user_text'), msg('assistant', [toolUse('toolu_2')]), msg('tool_results'), msg('assistant', [textBlock('two')])];
-    const a1 = action('a1', 'toolu_1');
-    const a2 = action('a2', 'toolu_2');
+    const first = msg('assistant', [toolUse('toolu_1')]);
+    const second = msg('assistant', [toolUse('toolu_2')]); // a later tool call in the same turn
+    const later = msg('assistant', [toolUse('toolu_3')]); // a follow-up turn
+    const messages = [
+      msg('user_text'),
+      first,
+      msg('tool_results'),
+      second,
+      msg('tool_results'),
+      msg('assistant', [textBlock('plan')]),
+      msg('app_note'),
+      msg('user_text'),
+      later,
+    ];
+    const [a1, a2, a3] = [action('a1', 'toolu_1'), action('a2', 'toolu_2'), action('a3', 'toolu_3')];
 
-    const { after } = placeActions([...turn1, note, ...turn2], [a1, a2]);
+    const { after } = placeActions(messages, [a1, a2, a3]);
 
-    expect(after.get(turn1[3].id)).toEqual([a1]);
-    expect(after.get(turn2[3].id)).toEqual([a2]);
+    expect(after.get(first.id)).toEqual([a1]);
+    expect(after.get(second.id)).toEqual([a2]);
+    expect(after.get(later.id)).toEqual([a3]);
   });
 
-  it('falls back to the proposing message while the turn is still running', () => {
+  it('never moves a proposal as later messages arrive', () => {
     n = 0;
-    const user = msg('user_text');
-    const proposing = msg('assistant', [toolUse('toolu_1')]);
+    const all = [
+      msg('user_text'),
+      msg('assistant', [toolUse('toolu_1')]), // <- made the proposal
+      msg('tool_results'),
+      msg('assistant', [textBlock('plan')]),
+      msg('app_note'),
+      msg('user_text'),
+      msg('assistant', [textBlock('anything else?')]),
+    ];
     const a1 = action('a1', 'toolu_1');
 
-    expect(placeActions([user, proposing], [a1]).after.get(proposing.id)).toEqual([a1]);
+    // Replay the conversation arriving one message at a time (from the moment the proposing message exists).
+    for (let upTo = 2; upTo <= all.length; upTo++) {
+      const { after, unplaced } = placeActions(all.slice(0, upTo), [a1]);
+      expect([...after.keys()]).toEqual([all[1].id]);
+      expect(unplaced).toEqual([]);
+    }
+  });
+
+  it("keeps the model's order of tool calls within one message, whatever order the proposals were stored in", () => {
+    n = 0;
+    const proposing = msg('assistant', [toolUse('toolu_1'), toolUse('toolu_2'), toolUse('toolu_3')]);
+    const [a1, a2, a3] = [action('a1', 'toolu_1'), action('a2', 'toolu_2'), action('a3', 'toolu_3')];
+
+    const { after } = placeActions([msg('user_text'), proposing], [a3, a1, a2]);
+
+    expect(after.get(proposing.id)?.map((a) => a.id)).toEqual(['a1', 'a2', 'a3']);
   });
 
   it('leaves proposals it cannot place (unknown tool id, bad raw JSON) at the end', () => {

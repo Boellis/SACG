@@ -18,6 +18,7 @@ vi.mock('../../auth/useAuth', () => ({ useAuth: vi.fn() }));
 vi.mock('../../lib/firebase', () => ({ auth: {}, db: {}, app: {}, functions: {} }));
 
 import * as apiMod from './assistantApi';
+import * as emailJobsApiMod from '../email/emailJobsApi';
 import * as membersApiMod from '../members/membersApi';
 import * as useAuthMod from '../../auth/useAuth';
 import AssistantPage from './AssistantPage';
@@ -27,12 +28,15 @@ import type {
   AssistantThread,
   ChatResult,
   ChatUsage,
+  ExecuteActionResult,
   MessageKind,
 } from './types';
 import type { Member } from '../../lib/types';
 
 const mockedSend = vi.mocked(apiMod.sendAssistantMessage);
 const mockedExecute = vi.mocked(apiMod.executeAssistantAction);
+const mockedReject = vi.mocked(apiMod.rejectAssistantAction);
+const mockedListenJob = vi.mocked(emailJobsApiMod.listenEmailJob);
 const mockedListenThreads = vi.mocked(apiMod.listenThreads);
 const mockedListenMessages = vi.mocked(apiMod.listenThreadMessages);
 const mockedListenActions = vi.mocked(apiMod.listenThreadActions);
@@ -555,25 +559,214 @@ describe('AssistantPage', () => {
   // Action cards in the chat
   // -------------------------------------------------------------------------
 
-  it('places a proposal after the assistant message that closes the turn which made it', () => {
+  /** True when `a` comes before `b` in the page. */
+  const before = (a: HTMLElement, b: HTMLElement) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+  /** The start of a turn: the admin's request, then the assistant message that proposes `toolUseIds`. */
+  const proposingTurn = (...toolUseIds: string[]): AssistantMessage[] => [
+    msg(1, 'user_text', 'Please set up an RSVP'),
+    msg(2, 'assistant', 'Drafting that now', {}, [{ type: 'text', text: 'Drafting that now' }, ...toolUseIds.map(toolUse)]),
+  ];
+
+  it('places a proposal right after the assistant message that made it, before the rest of the turn', () => {
     renderPage();
     openThread(
       't1',
       [
-        msg(1, 'user_text', 'Please set up an RSVP'),
-        msg(2, 'assistant', '', { display: { text: '' } }, [toolUse('toolu_1')]),
+        ...proposingTurn('toolu_1'),
         msg(3, 'tool_results', 'hidden'),
-        msg(4, 'assistant', "Here's the plan", {}, [{ type: 'text', text: "Here's the plan" }]),
+        msg(4, 'assistant', "Here's the plan"),
         msg(5, 'user_text', 'Thanks!'),
       ],
       [eventAction()],
     );
 
-    const plan = screen.getByText("Here's the plan");
+    const drafting = screen.getByText('Drafting that now');
     const proposal = screen.getByText('Create the Nov 7 meeting');
+    const plan = screen.getByText("Here's the plan");
     const thanks = screen.getByText('Thanks!');
-    expect(plan.compareDocumentPosition(proposal) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(proposal.compareDocumentPosition(thanks) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(before(drafting, proposal)).toBe(true);
+    expect(before(proposal, plan)).toBe(true);
+    expect(before(plan, thanks)).toBe(true);
+  });
+
+  it('keeps a proposal where its own message put it as the turn goes on and later turns follow', () => {
+    renderPage();
+    const turn = proposingTurn('toolu_1');
+    openThread('t1', turn, [eventAction()]);
+    const card = screen.getByText('Create the Nov 7 meeting'); // a node of the card: if it is rebuilt this is a new element
+    const stays = () => {
+      expect(screen.getByText('Create the Nov 7 meeting')).toBe(card);
+      expect(before(screen.getByText('Drafting that now'), card)).toBe(true);
+    };
+    stays();
+
+    act(() => emit.messages([...turn, msg(3, 'tool_results', 'hidden'), msg(4, 'assistant', "Here's the plan")]));
+    stays();
+    expect(before(card, screen.getByText("Here's the plan"))).toBe(true);
+
+    act(() =>
+      emit.messages([
+        ...turn,
+        msg(3, 'tool_results', 'hidden'),
+        msg(4, 'assistant', "Here's the plan"),
+        msg(5, 'user_text', 'Thanks!'),
+        msg(6, 'assistant', "You're welcome"),
+      ]),
+    );
+    stays();
+    expect(before(card, screen.getByText("Here's the plan"))).toBe(true);
+    expect(before(screen.getByText("Here's the plan"), screen.getByText("You're welcome"))).toBe(true);
+  });
+
+  it('updates a card in place, never rebuilding it, as the member list and its own status change', () => {
+    let deliverMembers: (m: Member[]) => void = () => {};
+    mockedListenMembers.mockImplementation((cb) => {
+      deliverMembers = cb;
+      cb(members);
+      return vi.fn();
+    });
+    renderPage();
+    openThread('t1', proposingTurn('toolu_1'), [eventAction()]);
+    const card = screen.getByText('Create the Nov 7 meeting');
+
+    act(() => deliverMembers([...members, { ...members[1], id: 'm-new', displayName: 'New Member' } as Member]));
+    expect(screen.getByText('Create the Nov 7 meeting')).toBe(card);
+
+    act(() => emit.actions([eventAction({ status: 'executing' })]));
+    expect(screen.getByText('Create the Nov 7 meeting')).toBe(card);
+    expect(screen.getByText('Sending…')).toBeInTheDocument();
+
+    act(() => emit.actions([eventAction({ status: 'executed', result: { eventId: 'ev1' } })]));
+    expect(screen.getByText('Create the Nov 7 meeting')).toBe(card);
+    expect(screen.getByText('Done')).toBeInTheDocument();
+  });
+
+  it('keeps a card mounted while the assistant keeps talking: its edit and its running call survive', async () => {
+    const call = deferred<ExecuteActionResult>();
+    mockedExecute.mockReturnValueOnce(call.promise);
+    renderPage();
+    const turn = proposingTurn('toolu_1');
+    openThread('t1', turn, [eventAction()]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'X' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    expect(mockedExecute).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeDisabled();
+
+    // The turn carries on while that call is still running: more messages arrive.
+    act(() => emit.messages([...turn, msg(3, 'tool_results', 'hidden'), msg(4, 'assistant', "Here's the plan")]));
+
+    expect(screen.getByLabelText('Title')).toHaveValue('X'); // the edit survived
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeDisabled(); // still in flight
+    expect(screen.getByRole('button', { name: 'Reject' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Done editing' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    expect(mockedExecute).toHaveBeenCalledTimes(1);
+
+    await act(async () => call.resolve({ status: 'executed', result: {} }));
+
+    expect(mockedExecute.mock.calls[0][0]).toEqual({
+      threadId: 't1',
+      actionId: 'a-event',
+      mode: 'run',
+      overrides: { title: 'X' },
+    });
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeDisabled(); // sent: waits for its live status
+  });
+
+  it("keeps an email's test send guarded while the assistant keeps talking, so a test goes out once", async () => {
+    mockedListenJob.mockImplementation(() => vi.fn());
+    const call = deferred<ExecuteActionResult>();
+    mockedExecute.mockReturnValueOnce(call.promise);
+    renderPage();
+    const turn = proposingTurn('toolu_1', 'toolu_2');
+    const event = eventAction({ status: 'executed', result: { eventId: 'ev1', title: 'Meeting' } });
+    const email = emailAction({ toolUseId: 'toolu_2' });
+    openThread('t1', turn, [event, email]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send test' }));
+    expect(mockedExecute).toHaveBeenCalledTimes(1);
+
+    act(() => emit.messages([...turn, msg(3, 'tool_results', 'hidden'), msg(4, 'assistant', "Here's the plan")]));
+
+    expect(screen.getByRole('button', { name: 'Send test' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Approve & send to everyone' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Send test' }));
+    expect(mockedExecute).toHaveBeenCalledTimes(1);
+
+    await act(async () => call.resolve({ status: 'proposed', result: { jobId: 'job-test-1' } }));
+
+    expect(mockedListenJob).toHaveBeenCalledWith('job-test-1', expect.any(Function));
+    expect(screen.getByRole('button', { name: 'Send test' })).toBeEnabled(); // a test send doesn't lock the card
+    expect(screen.getByRole('button', { name: 'Approve & send to everyone' })).toBeEnabled();
+  });
+
+  it('keeps a card, and what was typed into it, when the message that made it arrives after it', () => {
+    renderPage();
+    const turn = proposingTurn('toolu_1');
+    // The proposal is delivered before the assistant message that made it: the two listeners aren't ordered.
+    openThread('t1', [turn[0]], [eventAction()]);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'X' } });
+
+    const card = screen.getByText('Create the Nov 7 meeting');
+    expect(before(card, screen.getByLabelText('Title'))).toBe(true);
+
+    act(() => emit.messages(turn));
+
+    expect(screen.getByText('Create the Nov 7 meeting')).toBe(card); // moved into place, not rebuilt
+    expect(screen.getByLabelText('Title')).toHaveValue('X');
+    expect(before(screen.getByText('Drafting that now'), card)).toBe(true); // and now sits right after its message
+  });
+
+  it.each([
+    ['Approve', () => mockedExecute],
+    ['Reject', () => mockedReject],
+  ])("doesn't let the admin leave the conversation while a card's %s is running", async (buttonName, api) => {
+    const call = deferred<ExecuteActionResult | undefined>();
+    api().mockReturnValueOnce(call.promise as never);
+    renderPage();
+    act(() => emit.threads([thread('t1', 'Meeting thread'), thread('t2', 'Other thread')]));
+    fireEvent.click(screen.getByRole('button', { name: /Meeting thread/ }));
+    act(() => {
+      emit.messages(proposingTurn('toolu_1'));
+      emit.actions([eventAction()]);
+    });
+    fireEvent.click(screen.getByRole('button', { name: buttonName }));
+    expect(api()).toHaveBeenCalledTimes(1);
+
+    // Leaving would unmount the card and forget the call: coming back, its buttons would work again.
+    const other = screen.getByRole('button', { name: /Other thread/ });
+    expect(other).toBeDisabled();
+    expect(screen.getByRole('button', { name: /new conversation/i })).toBeDisabled();
+    fireEvent.click(other);
+    expect(mockedListenMessages).not.toHaveBeenCalledWith('t2', expect.any(Function), expect.any(Function));
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Reject' })).toBeDisabled();
+
+    await act(async () => call.resolve(undefined));
+
+    expect(screen.getByRole('button', { name: /Other thread/ })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /new conversation/i })).toBeEnabled();
+  });
+
+  it('lets the admin move on again when a card call fails', async () => {
+    mockedExecute.mockRejectedValueOnce(Object.assign(new Error('Approve the event first'), { code: 'functions/failed-precondition' }));
+    renderPage();
+    act(() => emit.threads([thread('t1', 'Meeting thread'), thread('t2', 'Other thread')]));
+    fireEvent.click(screen.getByRole('button', { name: /Meeting thread/ }));
+    act(() => {
+      emit.messages(proposingTurn('toolu_1'));
+      emit.actions([eventAction()]);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+
+    expect(await screen.findByText('Approve the event first')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Other thread/ })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled();
   });
 
   it('still shows a proposal it cannot match to a message, at the end', () => {
