@@ -1,7 +1,9 @@
 import {
   createContext,
   useContext,
+  useEffect,
   useId,
+  useReducer,
   useRef,
   useState,
   type ComponentProps,
@@ -106,6 +108,35 @@ export function useActionRunner(threadId: string, actionId: string): ActionRunne
   };
 }
 
+/** How long a run's claim on an action stands: EXECUTE_LEASE_MS in functions/src/assistant/actions.ts. */
+const EXECUTE_LEASE_MS = 120_000;
+
+/** setTimeout's longest delay; a longer wait is just checked again then. */
+const MAX_TIMER_MS = 2_147_483_647;
+
+/**
+ * Whether an 'executing' action has outlived its run's claim: that run died
+ * (its call may have failed or never answered), and the server lets the next
+ * `run` call finish the action, or run it again, without doing anything twice.
+ * As on the server, a claim with no time counts as lapsed. A card left open
+ * re-renders by itself when a live claim lapses.
+ */
+function useClaimLapsed(action: AssistantAction): boolean {
+  const [tick, recheck] = useReducer((n: number) => n + 1, 0);
+  const executing = action.status === 'executing';
+  const claimedAt = action.claimedAt?.toDate?.().getTime();
+  const lapsesAt = claimedAt === undefined || Number.isNaN(claimedAt) ? 0 : claimedAt + EXECUTE_LEASE_MS;
+  const lapsed = executing && Date.now() >= lapsesAt;
+
+  useEffect(() => {
+    if (!executing || lapsed) return;
+    const timer = setTimeout(recheck, Math.min(lapsesAt - Date.now() + 100, MAX_TIMER_MS));
+    return () => clearTimeout(timer);
+  }, [executing, lapsed, lapsesAt, tick]);
+
+  return lapsed;
+}
+
 // ---------------------------------------------------------------------------
 // Pieces shared by the cards
 // ---------------------------------------------------------------------------
@@ -186,6 +217,11 @@ export interface ActionShellProps {
   onToggleEdit: () => void;
   approveLabel: string;
   onApprove: () => void;
+  /**
+   * The admin's edits, as Approve sends them. Finish sends them again: a run
+   * that died before doing anything starts over, and must do what was approved.
+   */
+  overrides?: Record<string, unknown>;
   /** Approve is off for a reason the card should state (shown beneath the buttons). */
   blockedReason?: string;
   /** Approve is off because the edits aren't valid; the card shows what is wrong itself. */
@@ -201,7 +237,8 @@ export interface ActionShellProps {
 /**
  * Frame for one proposal: kind, summary and status badge on top, then the
  * card's own content, then Edit / Reject / Approve while it is still open.
- * Once it has run, was rejected or is running, there are no buttons.
+ * Once it has run or was rejected there are no buttons, and none while it
+ * runs either, unless the run outlived its claim: then Finish completes it.
  */
 export function ActionShell({
   label,
@@ -211,6 +248,7 @@ export function ActionShell({
   onToggleEdit,
   approveLabel,
   onApprove,
+  overrides,
   blockedReason,
   invalid,
   children,
@@ -219,6 +257,7 @@ export function ActionShell({
 }: ActionShellProps) {
   const open = action.status === 'proposed';
   const frozen = runner.busy || runner.locked;
+  const stuck = useClaimLapsed(action);
 
   return (
     <div className="w-full max-w-2xl space-y-3 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
@@ -249,6 +288,17 @@ export function ActionShell({
         <p role="alert" className="text-xs text-red-600 whitespace-pre-wrap break-words">
           {runner.error}
         </p>
+      )}
+
+      {stuck && (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-gray-100 pt-3">
+          <p className="text-xs text-amber-700">
+            This stopped partway. Finish checks what was done and completes it, without doing anything twice.
+          </p>
+          <Button disabled={frozen} onClick={() => void runner.execute({ mode: 'run', overrides })}>
+            Finish
+          </Button>
+        </div>
       )}
 
       {open && (

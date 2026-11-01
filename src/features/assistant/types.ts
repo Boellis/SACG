@@ -86,6 +86,12 @@ interface ActionBase {
   toolUseId: string;
   result?: Record<string, unknown>;
   error?: string;
+  /**
+   * When a run claimed the action ('executing'). A claim older than the server's
+   * EXECUTE_LEASE_MS (2 minutes) belongs to a run that died, and the next `run`
+   * call finishes the action, or runs it again, without doing anything twice.
+   */
+  claimedAt?: Timestamp;
   executedBy?: string;
   executedByName?: string;
   executedAt?: Timestamp;

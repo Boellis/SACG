@@ -44,6 +44,7 @@ export default function AnnouncementActionCard({ threadId, action }: CardProps<A
       onToggleEdit={() => setEditing((e) => !e)}
       approveLabel="Approve"
       onApprove={() => void runner.execute({ mode: 'run', overrides })}
+      overrides={overrides}
       invalid={problem !== null}
       done={
         <>

@@ -144,6 +144,9 @@ export default function EmailActionCard({ threadId, action, members, me, actions
   ];
 
   const sentJobId = jobIdOf(action.result);
+  // A run queues its job under the action's own id, so a send still running (or stuck) can be followed before
+  // its result is stored.
+  const runningJobId = action.status === 'executing' ? action.id : null;
   const skipped = typeof action.result?.skipped === 'number' ? action.result.skipped : 0;
 
   // "Everyone" is only true for the all-members audience; otherwise say who it really goes to.
@@ -174,6 +177,7 @@ export default function EmailActionCard({ threadId, action, members, me, actions
       onToggleEdit={() => setEditing((e) => !e)}
       approveLabel={approveLabel}
       onApprove={() => void approve()}
+      overrides={overrides}
       invalid={problem !== null}
       blockedReason={blockedReason}
       done={
@@ -233,6 +237,7 @@ export default function EmailActionCard({ threadId, action, members, me, actions
           <BodyPreview text={edited.body} />
         )}
         {input.rsvp && <p className="text-xs text-gray-600">{`Includes personal RSVP links for: ${eventTitle ?? 'an event'}`}</p>}
+        {runningJobId && <EmailJobProgress jobId={runningJobId} />}
       </div>
     </ActionShell>
   );
