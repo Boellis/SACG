@@ -16,6 +16,8 @@ const WholeGardenPage = lazy(() => import('./features/plots/WholeGardenPage'));
 // Lazy-loaded so Recharts (and later chart-heavy tabs) stay out of the main bundle
 // until an admin opens the analytics dashboard.
 const AnalyticsPage = lazy(() => import('./features/analytics/AnalyticsPage'));
+// Public, no-login page behind each member's emailed RSVP link; its own chunk.
+const RsvpPage = lazy(() => import('./features/rsvp/RsvpPage'));
 import MembersPage from './features/members/MembersPage';
 import WaitlistPage from './features/members/WaitlistPage';
 import MemberDetail from './features/members/MemberDetail';
@@ -40,6 +42,15 @@ export default function App() {
         <Routes>
           <Route path="/signin" element={<SignIn />} />
           <Route path="/signup" element={<SignUp />} />
+          {/* Outside RequireAuth: most invitees have never signed in. */}
+          <Route
+            path="/rsvp/:token"
+            element={
+              <Suspense fallback={<div className="min-h-screen bg-garden-50 p-6 text-center text-gray-500 text-sm">Loading…</div>}>
+                <RsvpPage />
+              </Suspense>
+            }
+          />
           <Route element={<RequireAuth />}>
             <Route element={<Layout />}>
               <Route path="/" element={<Dashboard />} />
