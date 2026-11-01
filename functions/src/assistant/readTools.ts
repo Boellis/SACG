@@ -6,7 +6,7 @@ import type { AdminCaller } from '../lib/auth';
 import { AudienceSchema, DocIdSchema, describeAudience, resolveAudience } from '../email/audience';
 import { EMAIL_JOBS } from '../email/jobs';
 import { GARDEN_TZ, formatGardenDate, formatGardenWhen, gardenToday, parseGardenLocal, toGardenLocal } from '../lib/time';
-import { hideContactDetails } from './redact';
+import { hideContactDetails, neutralizeAppMarkers } from './redact';
 import { GardenDateSchema, describeIssues } from './schemas';
 
 export interface ReadToolContext {
@@ -33,8 +33,9 @@ function parse<T extends z.ZodType>(tool: string, schema: T, input: unknown): z.
 }
 
 // Member and admin free text (RSVP notes, descriptions, names) can hold contact
-// details; structured email/phone fields are never read into a result.
-const scrub = hideContactDetails;
+// details (structured email/phone fields are never read into a result) or an
+// app marker posing as the app.
+const scrub = (s: string) => hideContactDetails(neutralizeAppMarkers(s));
 
 const textOf = (v: unknown) => (typeof v === 'string' ? scrub(v.trim()) : '');
 const clip = (s: string, max: number) => (s.length > max ? `${s.slice(0, max - 1)}…` : s);

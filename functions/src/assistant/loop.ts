@@ -15,6 +15,7 @@ import { EFFORT, FALLBACK_BETA, MAX_TOKENS, MAX_TOOL_ITERATIONS, MODEL } from '.
 import { appendMessage, loadHistory } from './history';
 import { SYSTEM_PROMPT, turnContext } from './prompt';
 import { runReadTool } from './readTools';
+import { neutralizeAppMarkers } from './redact';
 import { ACTION_SCHEMAS, describeIssues } from './schemas';
 import { PROPOSE_TOOL_ACTION, READ_TOOLS, TOOL_DEFINITIONS, TOOL_LABELS } from './tools';
 
@@ -173,7 +174,8 @@ export async function runTurn(
   await append({
     role: 'user',
     kind: 'user_text',
-    content: [{ type: 'text', text: `${turnContext({ caller, now: now() })}\n\n${userText}` }],
+    // What the admin typed is data: an app marker in it can't pass for the app's own.
+    content: [{ type: 'text', text: `${turnContext({ caller, now: now() })}\n\n${neutralizeAppMarkers(userText)}` }],
     display: { text: userText },
     authorUid: caller.uid,
     authorName: caller.displayName,

@@ -6,7 +6,7 @@ import type { AdminCaller } from '../lib/auth';
 import { formatGardenWhen, parseGardenLocal } from '../lib/time';
 import { createEmailJob, EMAIL_JOBS } from '../email/jobs';
 import { appendMessage, threadRef } from './history';
-import { hideContactDetails } from './redact';
+import { hideContactDetails, neutralizeAppMarkers } from './redact';
 import {
   ACTION_SCHEMAS,
   describeIssues,
@@ -153,7 +153,7 @@ function describeEffect(type: KeyedType, id: string, data: DocumentData): Done {
       const when = start && end ? formatGardenWhen(start, end, data.allDay === true) : '';
       return {
         result: { eventId: id, title, when, url: CALENDAR_URL },
-        line: `created the calendar event "${title}" (event id ${id}) for ${when}.`,
+        line: `created the calendar event "${forNote(title)}" (event id ${id}) for ${when}.`,
       };
     }
     case 'send_email': {
@@ -169,14 +169,14 @@ function describeEffect(type: KeyedType, id: string, data: DocumentData): Done {
       const title = String(data.title ?? '');
       return {
         result: { announcementId: id, title, url: `${APP_URL}/lounge` },
-        line: `posted the announcement "${title}" (id ${id}) in the Members Lounge.`,
+        line: `posted the announcement "${forNote(title)}" (id ${id}) in the Members Lounge.`,
       };
     }
     case 'create_poll': {
       const question = String(data.question ?? '');
       return {
         result: { pollId: id, question, url: `${APP_URL}/polls` },
-        line: `created the poll "${question}" (id ${id}).`,
+        line: `created the poll "${forNote(question)}" (id ${id}).`,
       };
     }
   }
@@ -333,7 +333,7 @@ async function updateEvent(db: Firestore, u: UpdateEventAction): Promise<{ resul
     const changed = Object.keys(patch);
     return {
       result: { eventId: ref.id, title, when, url: CALENDAR_URL, changed },
-      line: `updated the calendar event "${title}" (event id ${ref.id}): changed ${changed.join(', ')}; it is now ${when}.`,
+      line: `updated the calendar event "${forNote(title)}" (event id ${ref.id}): changed ${changed.join(', ')}; it is now ${when}.`,
     };
   });
 }
@@ -438,8 +438,11 @@ async function recordFailure(db: Firestore, ref: DocumentReference, mode: Execut
   });
 }
 
-/** A person's name as it goes into an app note: the model reads notes, so contact details are hidden. */
-const forNote = (name: string) => hideContactDetails(name);
+/**
+ * Text people wrote (names, titles, questions) as it goes into an app note. The
+ * model reads notes, so contact details are hidden and app markers rewritten.
+ */
+const forNote = (text: string) => hideContactDetails(neutralizeAppMarkers(text));
 
 /** Tell the assistant what an admin did (replayed before the admin's next message). Best effort. */
 async function appNote(db: Firestore, threadId: string, text: string): Promise<void> {
