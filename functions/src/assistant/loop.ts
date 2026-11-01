@@ -30,8 +30,8 @@ export interface ModelCallOptions {
 export type CreateMessage = (params: MessageCreateParamsNonStreaming, options?: ModelCallOptions) => Promise<BetaMessage>;
 
 export const REFUSAL_REPLY = "I can't help with that one. Try rephrasing, or ask Brandon.";
-const TRUNCATED_NOTE = '(My reply got cut off because it ran too long. Ask me to continue, or to keep it shorter.)';
-const PAUSED_NOTE = '(I paused here to stay within my limits for one message. Say "continue" and I\'ll pick up where I left off.)';
+export const TRUNCATED_NOTE = '(My reply got cut off because it ran too long. Ask me to continue, or to keep it shorter.)';
+export const PAUSED_NOTE = '(I paused here to stay within my limits for one message. Say "continue" and I\'ll pick up where I left off.)';
 
 /**
  * No new model call starts after this much of a turn has passed, so the turn
@@ -159,6 +159,13 @@ async function runTool(ctx: ToolContext, block: BetaToolUseBlock): Promise<{ res
  * proposals), and store all their results as one message. Ends when the model
  * stops calling tools, refuses, runs out of tokens, or the turn hits its step
  * or time limit. The reply is the text of the last assistant message.
+ *
+ * The chat shows only stored messages, so a turn that stops early stores its
+ * note too. After tool results (the step or time limit, or a cut-off tool
+ * call) the note is a text-only assistant message of its own: it alternates
+ * with the results and replays the same way every time. A text-only reply cut
+ * at max_tokens is already the last message, so the note goes in its display
+ * text only. What the model wrote, thinking blocks included, is never changed.
  */
 export async function runTurn(
   deps: { db: Firestore; createMessage: CreateMessage; now?: () => Date },
@@ -183,9 +190,14 @@ export async function runTurn(
 
   const actionIds: string[] = [];
   let reply = '';
+  // Ends a turn whose last stored message is tool results: the note is stored as the assistant's text-only reply.
+  const stopWithNote = async (note: string) => {
+    await append({ role: 'assistant', kind: 'assistant', content: [{ type: 'text', text: note }], display: { text: note } });
+    return { reply: withNote(reply, note), actionIds };
+  };
   for (let step = 0; step < MAX_TOOL_ITERATIONS; step++) {
     const elapsed = now().getTime() - startedAt;
-    if (step > 0 && elapsed >= TURN_TIME_BUDGET_MS) return { reply: withNote(reply, PAUSED_NOTE), actionIds };
+    if (step > 0 && elapsed >= TURN_TIME_BUDGET_MS) return stopWithNote(PAUSED_NOTE);
     const remaining = Math.max(1_000, TURN_DEADLINE_MS - elapsed);
 
     const response = await createMessage(buildRequest(await loadHistory(db, threadId)), {
@@ -207,19 +219,21 @@ export async function runTurn(
     }
 
     const toolUses = response.content.filter(isToolUse);
+    const truncated = response.stop_reason === 'max_tokens';
     // A final message with no text still gets a reply. Empty content can't be
     // replayed (the API rejects an empty message mid-history), so it is stored
     // as that reply, like a refusal; any other content is stored verbatim.
     reply = textOf(response.content) || (toolUses.length === 0 ? emptyReply(actionIds.length) : '');
+    // A text-only reply cut off here ends the turn, so its note is shown with it (display only, never replayed).
+    const shown = truncated && toolUses.length === 0 ? withNote(reply, TRUNCATED_NOTE) : reply;
     await append({
       role: 'assistant',
       kind: 'assistant',
       content: response.content.length > 0 ? response.content : [{ type: 'text', text: reply }],
-      display: { text: reply, tools: toolUses.map((t) => ({ name: t.name, label: labelOf(t.name) })) },
+      display: { text: shown, tools: toolUses.map((t) => ({ name: t.name, label: labelOf(t.name) })) },
     });
 
-    const truncated = response.stop_reason === 'max_tokens';
-    if (toolUses.length === 0) return { reply: truncated ? withNote(reply, TRUNCATED_NOTE) : reply, actionIds };
+    if (toolUses.length === 0) return { reply: shown, actionIds };
 
     const results: BetaToolResultBlockParam[] = [];
     for (const block of toolUses) {
@@ -238,7 +252,7 @@ export async function runTurn(
       content: results,
       display: { text: `${results.length} tool result${results.length === 1 ? '' : 's'}` },
     });
-    if (truncated) return { reply: withNote(reply, TRUNCATED_NOTE), actionIds };
+    if (truncated) return stopWithNote(TRUNCATED_NOTE);
   }
-  return { reply: withNote(reply, PAUSED_NOTE), actionIds };
+  return stopWithNote(PAUSED_NOTE);
 }

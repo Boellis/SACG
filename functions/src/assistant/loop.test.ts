@@ -7,7 +7,9 @@ import type { AdminCaller } from '../lib/auth';
 import { MAX_TOOL_ITERATIONS } from './config';
 import { StaleTurnError } from './history';
 import {
+  PAUSED_NOTE,
   REFUSAL_REPLY,
+  TRUNCATED_NOTE,
   TURN_DEADLINE_MS,
   TURN_TIME_BUDGET_MS,
   runTurn,
@@ -92,6 +94,28 @@ const count = async (col: string) => (await db.collection(col).get()).size;
 
 const turn = (createMessage: CreateMessage, userText = DENNY_REQUEST, now: () => Date = () => NOW) =>
   runTurn({ db, createMessage, now }, { threadId: THREAD, caller, userText });
+
+/** A history the API accepts: the admin first, no two assistant messages in a row, nothing empty, and every tool call answered by the next message. */
+function expectReplayable(messages: Params['messages']) {
+  expect(messages[0].role).toBe('user');
+  messages.forEach((m, i) => {
+    expect(Array.isArray(m.content) && m.content.length > 0).toBe(true);
+    if (m.role !== 'assistant') return;
+    expect(messages[i - 1].role).toBe('user');
+    const calls = (m.content as Array<{ type: string; id?: string }>).filter((b) => b.type === 'tool_use').map((b) => b.id);
+    if (calls.length > 0) expect((messages[i + 1].content as ToolResult[]).map((r) => r.tool_use_id)).toEqual(calls);
+  });
+}
+
+/** The next admin turn after a stopped one: two model calls, so its replays can be compared. */
+async function nextTurn(now: () => Date = () => NOW) {
+  const next = scripted(
+    () => message([toolUse('tu_next', 'get_garden_info', {})], 'tool_use'),
+    () => message([text('Picking up from there.')], 'end_turn'),
+  );
+  await turn(next.createMessage, 'continue', now);
+  return next.calls;
+}
 
 beforeEach(async () => {
   await clearFirestore();
@@ -325,39 +349,99 @@ describe('runTurn', () => {
     expect(final.display).toEqual({ text: result.reply });
   });
 
-  it('stops at max_tokens with a note, without running a cut-off tool call', async () => {
-    const { createMessage } = scripted(() =>
-      message([text('Here is the long draft'), toolUse('tu_1', 'propose_email', { audience: { kind: 'all_active' } })], 'max_tokens'),
-    );
+  it('stops at max_tokens without running a cut-off tool call, and stores the note for the admin after its results', async () => {
+    const cut = [thinking('sig-cut'), text('Here is the long draft'), toolUse('tu_1', 'propose_email', { audience: { kind: 'all_active' } })];
+    const { createMessage } = scripted(() => message(cut, 'max_tokens'));
     const result = await turn(createMessage);
-    expect(result.reply).toMatch(/^Here is the long draft/);
-    expect(result.reply).toMatch(/cut off/);
+    expect(result.reply).toBe(`Here is the long draft\n\n${TRUNCATED_NOTE}`);
     const msgs = await stored();
-    expect(msgs.map((m) => m.kind)).toEqual(['user_text', 'assistant', 'tool_results']);
+    expect(msgs.map((m) => [m.role, m.kind])).toEqual([
+      ['user', 'user_text'],
+      ['assistant', 'assistant'],
+      ['user', 'tool_results'],
+      ['assistant', 'assistant'],
+    ]);
+    // What the model wrote is stored untouched, thinking signature included.
+    expect(JSON.parse(msgs[1].raw)).toEqual(cut);
     expect(JSON.parse(msgs[2].raw)).toEqual([expect.objectContaining({ tool_use_id: 'tu_1', is_error: true })]);
+    // The note is a message of its own: text only, so the chat shows it after a reload too.
+    expect(JSON.parse(msgs[3].raw)).toEqual([{ type: 'text', text: TRUNCATED_NOTE }]);
+    expect(msgs[3].display).toEqual({ text: TRUNCATED_NOTE });
     expect(await count(`assistantThreads/${THREAD}/actions`)).toBe(0);
+
+    // The next turn replays all of it as stored, and the same way on every call.
+    const calls = await nextTurn();
+    expectReplayable(calls[0].messages);
+    expect(calls[0].messages.slice(1, 4)).toEqual([
+      { role: 'assistant', content: cut },
+      { role: 'user', content: JSON.parse(msgs[2].raw) },
+      { role: 'assistant', content: [{ type: 'text', text: TRUNCATED_NOTE }] },
+    ]);
+    expect(calls[1].messages.slice(0, calls[0].messages.length)).toEqual(calls[0].messages);
   });
 
-  it(`stops after ${MAX_TOOL_ITERATIONS} model calls in one turn`, async () => {
+  it('shows the cut-off note on a text-only reply cut at max_tokens, without changing what the model wrote', async () => {
+    const cut = [thinking('sig-long'), text('Here is the start of a very long answer')];
+    const { createMessage } = scripted(() => message(cut, 'max_tokens'));
+    const result = await turn(createMessage);
+    expect(result.reply).toBe(`Here is the start of a very long answer\n\n${TRUNCATED_NOTE}`);
+    const msgs = await stored();
+    // The reply is already the last message, so no note message is added after it...
+    expect(msgs.map((m) => m.kind)).toEqual(['user_text', 'assistant']);
+    // ...and the note goes in what the chat shows, never in what is replayed.
+    expect(JSON.parse(msgs[1].raw)).toEqual(cut);
+    expect(msgs[1].display).toEqual({ text: result.reply });
+
+    const calls = await nextTurn();
+    expectReplayable(calls[0].messages);
+    expect(calls[0].messages[1]).toEqual({ role: 'assistant', content: cut });
+    expect(JSON.stringify(calls[0].messages)).not.toContain(TRUNCATED_NOTE);
+  });
+
+  it(`stops after ${MAX_TOOL_ITERATIONS} model calls in one turn, and stores the pause note`, async () => {
     const steps = Array.from({ length: MAX_TOOL_ITERATIONS + 1 }, (_, i) => () =>
-      message([toolUse(`tu_${i}`, 'get_garden_info', {})], 'tool_use'),
+      message([thinking(`sig-${i}`), toolUse(`tu_${i}`, 'get_garden_info', {})], 'tool_use'),
     );
     const { createMessage, calls } = scripted(...steps);
     const result = await turn(createMessage);
     expect(calls).toHaveLength(MAX_TOOL_ITERATIONS);
-    expect(result.reply).toMatch(/continue/i);
+    expect(result.reply).toBe(PAUSED_NOTE);
+    const msgs = await stored();
+    expect(msgs).toHaveLength(2 + 2 * MAX_TOOL_ITERATIONS);
+    expect(msgs[msgs.length - 2].kind).toBe('tool_results');
+    expect(last(msgs)).toMatchObject({ role: 'assistant', kind: 'assistant', display: { text: PAUSED_NOTE } });
+    expect(JSON.parse(last(msgs).raw)).toEqual([{ type: 'text', text: PAUSED_NOTE }]);
+
+    const next = await nextTurn();
+    const replayed = next[0].messages;
+    expectReplayable(replayed);
+    expect(replayed.slice(-2)).toEqual([
+      { role: 'assistant', content: [{ type: 'text', text: PAUSED_NOTE }] },
+      { role: 'user', content: [{ type: 'text', text: `${CONTEXT}\n\ncontinue` }] },
+    ]);
+    expect(next[1].messages.slice(0, replayed.length)).toEqual(replayed);
   });
 
-  it('stops starting model calls once the turn has used its time budget', async () => {
+  it('stops starting model calls once the turn has used its time budget, and stores the pause note', async () => {
     let t = NOW.getTime();
     const step = (id: string) => () => {
       t += TURN_TIME_BUDGET_MS / 2 + 1;
-      return message([toolUse(id, 'get_garden_info', {})], 'tool_use');
+      return message([text(`Checking (${id}).`), toolUse(id, 'get_garden_info', {})], 'tool_use');
     };
     const { createMessage, calls } = scripted(step('tu_1'), step('tu_2'), () => message([text('never')], 'end_turn'));
     const result = await turn(createMessage, 'Hello', () => new Date(t));
     expect(calls).toHaveLength(2);
-    expect(result.reply).toMatch(/continue/i);
+    expect(result.reply).toBe(`Checking (tu_2).\n\n${PAUSED_NOTE}`);
+    const msgs = await stored();
+    expect(msgs.map((m) => m.kind)).toEqual(['user_text', 'assistant', 'tool_results', 'assistant', 'tool_results', 'assistant']);
+    expect(msgs[3].display.text).toBe('Checking (tu_2).');
+    expect(JSON.parse(msgs[5].raw)).toEqual([{ type: 'text', text: PAUSED_NOTE }]);
+    expect(msgs[5].display).toEqual({ text: PAUSED_NOTE });
+
+    const next = await nextTurn(() => new Date(t));
+    expectReplayable(next[0].messages);
+    expect(next[0].messages.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant', 'user', 'assistant', 'user']);
+    expect(next[0].messages[5]).toEqual({ role: 'assistant', content: [{ type: 'text', text: PAUSED_NOTE }] });
   });
 
   it("bounds each model call by what's left of the turn, with at most one retry", async () => {

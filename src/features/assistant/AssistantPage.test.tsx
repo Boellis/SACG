@@ -534,6 +534,37 @@ describe('AssistantPage', () => {
     expect(chip.parentElement?.parentElement?.querySelectorAll('div.whitespace-pre-wrap')).toHaveLength(0);
   });
 
+  it("shows the assistant's pause and cut-off notes from the stored conversation, right after the turn and after a reload", async () => {
+    // The server stores these notes (functions/src/assistant/loop.ts); the page only shows stored messages.
+    const paused = '(I paused here to stay within my limits for one message. Say "continue" and I\'ll pick up where I left off.)';
+    const cut = '(My reply got cut off because it ran too long. Ask me to continue, or to keep it shorter.)';
+    const stored = [
+      msg(1, 'user_text', 'Set up the Nov 7 RSVP'),
+      msg(2, 'assistant', 'Checking the calendar.', {
+        display: { text: 'Checking the calendar.', tools: [{ name: 'list_events', label: 'Checked the calendar' }] },
+      }),
+      msg(3, 'tool_results', '1 tool result'),
+      msg(4, 'assistant', paused), // a turn that hit its limits: the note is a message of its own
+      msg(5, 'user_text', 'continue'),
+      msg(6, 'assistant', `Here is the long draft\n\n${cut}`), // a text-only reply that was cut off: the note is in its text
+    ];
+    mockedSend.mockResolvedValueOnce(reply('t1', `Checking the calendar.\n\n${paused}`));
+    const { unmount } = renderPage();
+
+    typeMessage('Set up the Nov 7 RSVP');
+    fireEvent.click(sendButton());
+    await turnFinished();
+    act(() => emit.messages(stored.slice(0, 4)));
+    expect(within(screen.getByRole('log')).getByText(paused)).toBeInTheDocument();
+
+    unmount();
+    renderPage();
+    openThread('t1', stored);
+    const log = within(screen.getByRole('log'));
+    expect(log.getByText(paused)).toBeInTheDocument();
+    expect(log.getByText(/^Here is the long draft\s+\(My reply got cut off/)).toHaveTextContent(cut);
+  });
+
   it('shows app_note rows as system notes, without the [App update] prefix', () => {
     renderPage();
     openThread('t1', [msg(1, 'app_note', '[App update] Brandon Ellis approved action a1 (create_event): Created the Nov 7 meeting')]);
