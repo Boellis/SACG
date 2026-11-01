@@ -3,6 +3,7 @@ import { FieldValue, Timestamp, getFirestore, type DocumentData, type Firestore 
 import { z } from 'zod';
 import { REGION } from '../config';
 import { firstNameOf } from '../email/compose';
+import { withPublicErrors } from '../lib/publicErrors';
 import { RSVP_INVITES } from './invites';
 
 /** Each RSVP link accepts this many submissions before it locks. */
@@ -38,7 +39,15 @@ export interface SubmitRsvpInput {
   note?: string;
 }
 
-const TokenSchema = z.string().min(20).max(100).regex(/^[A-Za-z0-9_-]+$/);
+// Real tokens are 43-char base64url and never end in `_`. Firestore reserves
+// ids matching __.*__ and answers a lookup of one with a raw INVALID_ARGUMENT,
+// so that form is rejected here like any other malformed token.
+const TokenSchema = z
+  .string()
+  .min(20)
+  .max(100)
+  .regex(/^[A-Za-z0-9_-]+$/)
+  .refine((t) => !/^__.*__$/.test(t));
 const SubmitSchema = z
   .object({
     token: z.string(),
@@ -165,10 +174,14 @@ export async function submitRsvp(
   return { response };
 }
 
+// Unauthenticated callers only ever see a deliberate HttpsError, or
+// `unavailable` with a friendly retry message (see withPublicErrors).
 export const rsvpGetInvite = onCall({ region: REGION, timeoutSeconds: 30 }, (request) =>
-  getInvite(getFirestore(), (request.data as { token?: unknown } | null)?.token),
+  withPublicErrors('rsvpGetInvite', () =>
+    getInvite(getFirestore(), (request.data as { token?: unknown } | null)?.token),
+  ),
 );
 
 export const rsvpSubmit = onCall({ region: REGION, timeoutSeconds: 30 }, (request) =>
-  submitRsvp(getFirestore(), request.data),
+  withPublicErrors('rsvpSubmit', () => submitRsvp(getFirestore(), request.data)),
 );
