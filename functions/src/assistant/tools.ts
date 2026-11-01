@@ -1,10 +1,14 @@
 import type { BetaTool } from '@anthropic-ai/sdk/resources/beta/messages/messages';
 import type { ActionType } from './schemas';
 
-// JSON schemas for the model. Strict tool use compiles them into a grammar, so
-// they use only keywords the API supports there (no minLength / maxLength /
-// minimum / maximum / maxItems): length and range limits are stated in the
-// descriptions and enforced when every input is re-validated with zod.
+// JSON schemas for the model. The tools are deliberately not `strict`: the API
+// compiles strict schemas into a grammar, and with all 11 tools strict it
+// rejected every request (400 "The compiled grammar is too large, which would
+// cause performance issues…"); even 10 strict tools took ~22 s per request to
+// compile. The schemas are guidance for the model, while every input is
+// re-validated with zod (strict objects; a failure goes back as an is_error
+// tool result the model can fix). Length and range limits are stated in the
+// descriptions and enforced by zod.
 
 type JsonSchema = Record<string, unknown>;
 
@@ -60,11 +64,11 @@ const EVENT_FIELDS: Record<string, JsonSchema> = {
   description: str('Details shown on the calendar, up to 4,000 characters, plain text.'),
 };
 
-const tool =(name: string, description: string, input_schema: JsonSchema): BetaTool => ({
+// No `strict: true`: see the note at the top.
+const tool = (name: string, description: string, input_schema: JsonSchema): BetaTool => ({
   name,
   description,
   input_schema: input_schema as BetaTool['input_schema'],
-  strict: true,
 });
 
 /** Every tool the assistant has, in a fixed order (the prompt cache depends on it). */

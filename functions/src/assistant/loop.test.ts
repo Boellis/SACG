@@ -401,6 +401,10 @@ describe('runTurn', () => {
             toolUse('tu_3', 'propose_email', { ...RSVP_EMAIL, rsvp: { eventActionId: 'no-such-action' }, summary: 'x' }),
             toolUse('tu_4', 'propose_calendar_event', { ...DENNY_MEETING }),
             toolUse('tu_5', 'constructor', {}),
+            // Tools aren't strict (the API rejects them as too large), so the model can send
+            // what the JSON schema forbids: zod is the guard.
+            toolUse('tu_6', 'propose_calendar_event', { ...DENNY_MEETING, allDay: 'yes', organizer: 'Denny', summary: 'x' }),
+            toolUse('tu_7', 'find_members', { query: 'den', limit: 5 }),
           ],
           'tool_use',
         ),
@@ -414,10 +418,15 @@ describe('runTurn', () => {
       ['tu_3', true],
       ['tu_4', true],
       ['tu_5', true],
+      ['tu_6', true],
+      ['tu_7', true],
     ]);
     expect(results[2].content).toMatch(/no-such-action/);
     expect(results[3].content).toMatch(/summary/);
     expect(results[4].content).toBe('There is no tool called constructor.');
+    expect(results[5].content).toMatch(/allDay/);
+    expect(results[5].content).toMatch(/organizer/);
+    expect(results[6].content).toMatch(/limit/);
     expect((await stored())[1].display.tools[4]).toEqual({ name: 'constructor', label: 'constructor' });
     expect(await count(`assistantThreads/${THREAD}/actions`)).toBe(0);
   });

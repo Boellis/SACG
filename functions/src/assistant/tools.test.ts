@@ -18,15 +18,6 @@ function objectSchemas(schema: unknown): Schema[] {
   return [...own, ...children.flatMap(objectSchemas)];
 }
 
-/** Every keyword used anywhere in a JSON schema. */
-function keywords(schema: unknown): string[] {
-  if (Array.isArray(schema)) return schema.flatMap(keywords);
-  if (!schema || typeof schema !== 'object') return [];
-  return Object.entries(schema as Schema).flatMap(([k, v]) =>
-    k === 'properties' ? Object.values(v as Schema).flatMap(keywords) : [k, ...keywords(v)],
-  );
-}
-
 const byName = Object.fromEntries(TOOL_DEFINITIONS.map((t) => [t.name, t]));
 const shapeOf = (schema: z.ZodType) =>
   (schema as unknown as z.ZodObject<z.ZodRawShape>).shape as unknown as Record<string, z.ZodType>;
@@ -56,9 +47,15 @@ describe('TOOL_DEFINITIONS', () => {
     });
   });
 
-  it('makes every tool strict, with additionalProperties false on every object', () => {
+  // The live API rejected all 11 tools as strict ("The compiled grammar is too
+  // large…"), and even 10 strict tools took ~22 s per request to compile.
+  // Inputs are re-validated with zod instead (strict objects, is_error on failure).
+  it('sets no tool strict', () => {
+    for (const tool of TOOL_DEFINITIONS) expect(tool, tool.name).not.toHaveProperty('strict');
+  });
+
+  it('keeps additionalProperties false, and required fields among the properties, on every object', () => {
     for (const tool of TOOL_DEFINITIONS) {
-      expect(tool.strict, tool.name).toBe(true);
       for (const obj of objectSchemas(tool.input_schema)) {
         expect(obj.additionalProperties, tool.name).toBe(false);
         const props = Object.keys((obj.properties as Schema) ?? {});
@@ -93,27 +90,4 @@ describe('TOOL_DEFINITIONS', () => {
     }
   });
 
-  // The API compiles strict schemas into a grammar and answers 400 for features
-  // it doesn't support or for going over its limits (platform docs, "Structured
-  // outputs" → JSON Schema limitations). Scripted test models can't catch that.
-  it('stays inside the API limits for strict tools', () => {
-    expect(TOOL_DEFINITIONS.length).toBeLessThanOrEqual(20);
-    let optional = 0;
-    let unions = 0;
-    for (const tool of TOOL_DEFINITIONS) {
-      for (const obj of objectSchemas(tool.input_schema)) {
-        const props = obj.properties as Record<string, Schema>;
-        optional += Object.keys(props).filter((k) => !((obj.required as string[]) ?? []).includes(k)).length;
-        unions += Object.values(props).filter((p) => p.anyOf || Array.isArray(p.type)).length;
-      }
-      const unsupported = keywords(tool.input_schema).filter((k) =>
-        ['minLength', 'maxLength', 'minimum', 'maximum', 'multipleOf', 'maxItems', 'oneOf', 'not', 'uniqueItems'].includes(
-          k,
-        ),
-      );
-      expect(unsupported, tool.name).toEqual([]);
-    }
-    expect(optional).toBeLessThanOrEqual(24);
-    expect(unions).toBeLessThanOrEqual(16);
-  });
 });
