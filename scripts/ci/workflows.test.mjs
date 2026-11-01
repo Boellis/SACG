@@ -125,8 +125,16 @@ describe('deploy-prod.yml', () => {
   it('deploys exactly hosting, firestore rules and indexes, storage and functions, and never extensions', () => {
     const deploys = text.match(/firebase-tools@14\.9\.0 deploy[^\n]*/g) ?? [];
     expect(deploys).toHaveLength(1);
-    expect(deploys[0]).toBe('firebase-tools@14.9.0 deploy --only "hosting,firestore:rules,firestore:indexes,storage,functions" --project sacg-garden-app --non-interactive');
+    expect(deploys[0]).toBe('firebase-tools@14.9.0 deploy --only "hosting,firestore:rules,firestore:indexes,storage,functions" --project sacg-garden-app --non-interactive ${FORCE_FLAG}');
     expect(text).not.toMatch(/extensions/i);
+  });
+
+  it('passes --force only on a manual run that explicitly asks for it, never on a push', () => {
+    expect(text).toContain("FORCE_FLAG: ${{ github.event_name == 'workflow_dispatch' && inputs.force && '--force' || '' }}");
+    expect(text).toMatch(/      force:\n        description: [\s\S]*?\n        type: boolean\n        default: false\n/);
+    // nothing hard-codes the flag (single-line or block run:): it can only arrive through FORCE_FLAG
+    const withoutDescription = text.replace(/        description: >-\n[\s\S]*?\n        type: boolean/, '');
+    expect(withoutDescription.split('--force').length - 1).toBe(1);
   });
 
   it('gates on CI and runs in the production environment with keyless auth', () => {
@@ -140,7 +148,7 @@ describe('deploy-prod.yml', () => {
 
   it('is serialized and never cancelled mid-deploy', () => {
     expect(text).toMatch(/^concurrency:\n  group: deploy-prod\n  cancel-in-progress: false\n/m);
-    expect(text).toMatch(/^on:\n  push:\n    branches: \[prod\]\n  workflow_dispatch: \{\}\n/m);
+    expect(text).toMatch(/^on:\n  push:\n    branches: \[prod\]\n  workflow_dispatch:\n    inputs:\n      force:\n/m);
   });
 
   it('records the live Hosting version before deploying, and smoke-checks production after', () => {
@@ -171,5 +179,21 @@ describe('deploy-prod.yml', () => {
     expect(text).not.toMatch(/sacg-garden-app:@/);
     // the rollback step is the last one, so it sees the outcome of everything before it
     expect(text.lastIndexOf('hosting:clone')).toBeGreaterThan(text.lastIndexOf('smoke.mjs'));
+  });
+
+  it('skips the rollback when the live version never changed (re-releasing it is an HTTP 400)', () => {
+    const rollback = text.slice(text.indexOf('- name: Roll Hosting back'));
+    const iCheck = rollback.indexOf('if [ "$current" = "$PREV_VERSION" ]; then');
+    expect(iCheck).toBeGreaterThan(-1);
+    expect(rollback.indexOf('exit 0')).toBeGreaterThan(iCheck);
+    // the check reads the live channel again, and runs before the clone
+    expect(rollback.indexOf('channels/live')).toBeGreaterThan(-1);
+    expect(rollback.indexOf('channels/live')).toBeLessThan(iCheck);
+    expect(rollback).toContain('current=$(');
+    // a failed re-read must fall through to the clone (roll back), not abort under set -e
+    expect(rollback).toMatch(/\) \|\| live=""\n/);
+    expect(rollback).toMatch(/\) \|\| current=""\n/);
+    expect(iCheck).toBeLessThan(rollback.indexOf('hosting:clone'));
+    expect(rollback).toContain('TOKEN: ${{ steps.auth.outputs.access_token }}');
   });
 });
