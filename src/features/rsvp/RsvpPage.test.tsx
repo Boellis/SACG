@@ -10,6 +10,7 @@ vi.mock('../../lib/firebase', () => ({ auth: {}, db: {}, app: {}, functions: {} 
 
 import * as rsvpApiMod from './rsvpApi';
 import RsvpPage from './RsvpPage';
+import { CONTACT_EMAIL } from './constants';
 import type { InviteView } from './rsvpApi';
 
 const mockedGetInvite = vi.mocked(rsvpApiMod.getInvite);
@@ -114,10 +115,8 @@ describe('RsvpPage', () => {
     mockedGetInvite.mockRejectedValue(callableError('functions/not-found', "This RSVP link isn't valid."));
     renderAt();
     expect(await screen.findByText(/This RSVP link isn't valid/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'southatxgarden@gmail.com' })).toHaveAttribute(
-      'href',
-      'mailto:southatxgarden@gmail.com',
-    );
+    expect(CONTACT_EMAIL).toMatch(/^[^@\s]+@[^@\s]+\.[^@\s]+$/);
+    expect(screen.getByRole('link', { name: CONTACT_EMAIL })).toHaveAttribute('href', `mailto:${CONTACT_EMAIL}`);
     expect(screen.queryByRole('button', { name: /send my rsvp/i })).not.toBeInTheDocument();
   });
 
