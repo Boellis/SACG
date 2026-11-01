@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Timestamp } from 'firebase-admin/firestore';
 import type { CallableRequest } from 'firebase-functions/v2/https';
 import { logger } from 'firebase-functions/v2';
-import { APIConnectionError, AuthenticationError, InternalServerError, RateLimitError } from '@anthropic-ai/sdk';
+import { APIConnectionError, AuthenticationError, BadRequestError, InternalServerError, RateLimitError } from '@anthropic-ai/sdk';
 import type { BetaMessage } from '@anthropic-ai/sdk/resources/beta/messages/messages';
 import { testDb, clearFirestore } from '../testing/emulator';
 import { recordProposal } from './actions';
@@ -167,6 +167,12 @@ describe('handleAssistantChat', () => {
       /API key was rejected/,
     ],
     ['a rate limit', new RateLimitError(429, { type: 'error' }, 'rate limited', new Headers()), 'resource-exhausted', /busy/],
+    [
+      'a request the API refuses (400)',
+      new BadRequestError(400, { type: 'error' }, 'messages: invalid history', new Headers()),
+      'failed-precondition',
+      /Start a new conversation/,
+    ],
     ['a server error', new InternalServerError(500, { type: 'error' }, 'boom', new Headers()), 'unavailable', /try again/i],
     ['a network failure', new APIConnectionError({ message: 'Connection error.' }), 'unavailable', /try again/i],
   ])('maps %s from Anthropic to %s, and frees the thread', async (_label, err, code, message) => {

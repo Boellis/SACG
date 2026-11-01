@@ -74,6 +74,9 @@ const toolUseIds = (content: unknown): string[] =>
     ? content.filter((b) => b?.type === 'tool_use' && typeof b.id === 'string').map((b) => b.id as string)
     : [];
 
+const isEmptyContent = (content: unknown) =>
+  content === '' || content === null || content === undefined || (Array.isArray(content) && content.length === 0);
+
 const unfinishedResult = (id: string) => ({
   type: 'tool_result',
   tool_use_id: id,
@@ -93,6 +96,8 @@ const unfinishedResult = (id: string) => ({
  *   one exists.
  * - An assistant tool call whose results were never stored (the function died
  *   between the two appends) gets an error result, so the thread stays usable.
+ * - An assistant message with empty content is skipped: the API rejects one
+ *   anywhere but last, and it carries nothing to replay.
  */
 export function toApiMessages(entries: StoredEntry[]): BetaMessageParam[] {
   const out: BetaMessageParam[] = [];
@@ -103,6 +108,7 @@ export function toApiMessages(entries: StoredEntry[]): BetaMessageParam[] {
     pendingToolUses = [];
   };
   for (const e of entries) {
+    if (e.kind === 'assistant' && isEmptyContent(e.content)) continue;
     const msg = { role: e.role, content: e.content } as BetaMessageParam;
     if (e.kind === 'app_note') {
       notes.push(msg);

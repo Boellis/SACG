@@ -276,6 +276,33 @@ describe('runTurn', () => {
     expect(next.calls[0].messages[1].content).toEqual([{ type: 'text', text: REFUSAL_REPLY }]);
   });
 
+  it('answers an empty final reply sensibly, and never stores or replays it empty', async () => {
+    // The API sometimes ends a turn with content: [] after tool results.
+    const { createMessage } = scripted(
+      () => message([toolUse('tu_1', 'propose_calendar_event', { ...DENNY_MEETING, summary: 'Nov 7 meeting' })], 'tool_use'),
+      () => message([], 'end_turn'),
+    );
+    const result = await turn(createMessage);
+    expect(result.reply).toBe('I saved a proposal for you to review below. Nothing has been sent or changed yet.');
+    const final = last(await stored());
+    expect(JSON.parse(final.raw)).toEqual([{ type: 'text', text: result.reply }]);
+    expect(final.display).toEqual({ text: result.reply });
+
+    const next = scripted(() => message([text('You are welcome.')], 'end_turn'));
+    await turn(next.createMessage, 'Thanks!');
+    for (const m of next.calls[0].messages) expect(Array.isArray(m.content) && m.content.length > 0).toBe(true);
+  });
+
+  it('gives a final reply with no text a fallback, keeping its content verbatim', async () => {
+    const content = [thinking('sig-only')];
+    const { createMessage } = scripted(() => message(content, 'end_turn'));
+    const result = await turn(createMessage, 'Hello');
+    expect(result.reply).toBe("I didn't write a reply that time. Try asking again, or put it another way.");
+    const final = last(await stored());
+    expect(JSON.parse(final.raw)).toEqual(content);
+    expect(final.display).toEqual({ text: result.reply });
+  });
+
   it('stops at max_tokens with a note, without running a cut-off tool call', async () => {
     const { createMessage } = scripted(() =>
       message([text('Here is the long draft'), toolUse('tu_1', 'propose_email', { audience: { kind: 'all_active' } })], 'max_tokens'),

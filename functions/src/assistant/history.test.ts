@@ -110,6 +110,13 @@ describe('toApiMessages', () => {
     expect(out[out.length - 1].content).toEqual([toolResult('tu_1')]);
   });
 
+  it('never replays an empty assistant message (the API rejects one mid-history)', () => {
+    const blank: StoredEntry = { role: 'assistant', kind: 'assistant', content: '' };
+    const out = toApiMessages([u('Q1'), a(toolUse('tu_1')), r('tu_1'), a(), blank, u('Q2')]);
+    expect(out.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'user']);
+    expect(out.every((m) => (Array.isArray(m.content) ? m.content.length > 0 : m.content !== ''))).toBe(true);
+  });
+
   it('answers a tool call whose results were never stored (the run died), so the thread stays usable', () => {
     const out = toApiMessages([u('Q1'), a({ type: 'text', text: 'Looking' }, toolUse('tu_1'), toolUse('tu_2')), u('Q2')]);
     expect(out[2]).toEqual({

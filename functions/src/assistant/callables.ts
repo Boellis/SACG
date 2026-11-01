@@ -1,4 +1,4 @@
-import Anthropic, { APIError, AuthenticationError, RateLimitError } from '@anthropic-ai/sdk';
+import Anthropic, { APIError, AuthenticationError, BadRequestError, RateLimitError } from '@anthropic-ai/sdk';
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { logger } from 'firebase-functions/v2';
 import { getFirestore, type Firestore } from 'firebase-admin/firestore';
@@ -51,6 +51,13 @@ function fromAnthropic(err: unknown): unknown {
   }
   if (err instanceof RateLimitError) {
     return new HttpsError('resource-exhausted', 'The AI service is busy right now. Wait a minute, then send your message again.');
+  }
+  if (err instanceof BadRequestError) {
+    // Retrying the same conversation would fail the same way (and use up turns).
+    return new HttpsError(
+      'failed-precondition',
+      "The AI service couldn't continue this conversation. Start a new conversation; this one stays in your list.",
+    );
   }
   return new HttpsError('unavailable', "The AI service didn't answer. Please try again in a minute.");
 }

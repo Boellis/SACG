@@ -62,6 +62,13 @@ const textOf = (content: BetaContentBlock[]) =>
     .join('\n\n');
 const withNote = (text: string, note: string) => (text ? `${text}\n\n${note}` : note);
 
+/** What the admin sees when the model ends its turn without writing anything. */
+function emptyReply(proposals: number): string {
+  if (proposals === 0) return "I didn't write a reply that time. Try asking again, or put it another way.";
+  const what = proposals === 1 ? 'a proposal' : `${proposals} proposals`;
+  return `I saved ${what} for you to review below. Nothing has been sent or changed yet.`;
+}
+
 const result = (id: string, content: string, isError = false): BetaToolResultBlockParam => ({
   type: 'tool_result',
   tool_use_id: id,
@@ -176,11 +183,14 @@ export async function runTurn(
     }
 
     const toolUses = response.content.filter(isToolUse);
-    reply = textOf(response.content);
+    // A final message with no text still gets a reply. Empty content can't be
+    // replayed (the API rejects an empty message mid-history), so it is stored
+    // as that reply, like a refusal; any other content is stored verbatim.
+    reply = textOf(response.content) || (toolUses.length === 0 ? emptyReply(actionIds.length) : '');
     await appendMessage(db, threadId, {
       role: 'assistant',
       kind: 'assistant',
-      content: response.content,
+      content: response.content.length > 0 ? response.content : [{ type: 'text', text: reply }],
       display: { text: reply, tools: toolUses.map((t) => ({ name: t.name, label: labelOf(t.name) })) },
     });
 
