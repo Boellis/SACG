@@ -5,14 +5,20 @@ import type { Timestamp } from 'firebase/firestore';
 
 vi.mock('./assistantApi', () => ({
   sendAssistantMessage: vi.fn(),
+  executeAssistantAction: vi.fn(),
+  rejectAssistantAction: vi.fn(),
   listenThreads: vi.fn(),
   listenThreadMessages: vi.fn(),
   listenThreadActions: vi.fn(),
 }));
+vi.mock('../members/membersApi', () => ({ listenMembers: vi.fn() }));
+vi.mock('../email/emailJobsApi', () => ({ listenEmailJob: vi.fn(() => vi.fn()) }));
+vi.mock('../calendar/eventsApi', () => ({ listenRsvps: vi.fn(), listenEvents: vi.fn() }));
 vi.mock('../../auth/useAuth', () => ({ useAuth: vi.fn() }));
 vi.mock('../../lib/firebase', () => ({ auth: {}, db: {}, app: {}, functions: {} }));
 
 import * as apiMod from './assistantApi';
+import * as membersApiMod from '../members/membersApi';
 import * as useAuthMod from '../../auth/useAuth';
 import AssistantPage from './AssistantPage';
 import type {
@@ -26,9 +32,11 @@ import type {
 import type { Member } from '../../lib/types';
 
 const mockedSend = vi.mocked(apiMod.sendAssistantMessage);
+const mockedExecute = vi.mocked(apiMod.executeAssistantAction);
 const mockedListenThreads = vi.mocked(apiMod.listenThreads);
 const mockedListenMessages = vi.mocked(apiMod.listenThreadMessages);
 const mockedListenActions = vi.mocked(apiMod.listenThreadActions);
+const mockedListenMembers = vi.mocked(membersApiMod.listenMembers);
 const mockedUseAuth = vi.mocked(useAuthMod.useAuth);
 
 // ---------------------------------------------------------------------------
@@ -46,6 +54,40 @@ const me = {
   status: 'active',
   currentYearHours: 0,
 } as unknown as Member;
+
+const members = [
+  me,
+  { ...me, id: 'm-alice', uid: 'm-alice', email: 'alice@example.com', displayName: 'Alice Example', role: 'member' },
+  { ...me, id: 'm-bob', uid: 'm-bob', email: 'bob@example.com', displayName: 'Bob Example', role: 'member' },
+] as Member[];
+
+const eventAction = (over: Record<string, unknown> = {}) =>
+  ({
+    id: 'a-event',
+    type: 'create_event',
+    summary: 'Create the Nov 7 meeting',
+    status: 'proposed',
+    toolUseId: 'toolu_1',
+    input: { title: 'Meeting', type: 'meeting', start: '2026-11-07T09:00', end: '2026-11-07T10:00', allDay: false },
+    ...over,
+  }) as AssistantAction;
+
+const emailAction = (over: Record<string, unknown> = {}) =>
+  ({
+    id: 'a-email',
+    type: 'send_email',
+    summary: 'Email everyone the RSVP link',
+    status: 'proposed',
+    toolUseId: 'toolu_1',
+    dependsOn: 'a-event',
+    input: {
+      audience: { kind: 'all_active' },
+      subject: 'RSVP: Nov 7 meeting',
+      body: 'Hi {firstName}, {rsvpLink}',
+      rsvp: { eventActionId: 'a-event' },
+    },
+    ...over,
+  }) as AssistantAction;
 
 const thread = (id: string, title: string, over: Partial<AssistantThread> = {}): AssistantThread => ({
   id,
@@ -143,6 +185,10 @@ describe('AssistantPage', () => {
     mockedListenActions.mockImplementation((_id, cb) => {
       emit.actions = cb;
       return unsubscribe.actions;
+    });
+    mockedListenMembers.mockImplementation((cb) => {
+      cb(members);
+      return vi.fn();
     });
   });
 
@@ -506,7 +552,7 @@ describe('AssistantPage', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Proposals (placeholder lines until the action cards)
+  // Action cards in the chat
   // -------------------------------------------------------------------------
 
   it('places a proposal after the assistant message that closes the turn which made it', () => {
@@ -520,16 +566,7 @@ describe('AssistantPage', () => {
         msg(4, 'assistant', "Here's the plan", {}, [{ type: 'text', text: "Here's the plan" }]),
         msg(5, 'user_text', 'Thanks!'),
       ],
-      [
-        {
-          id: 'a1',
-          type: 'create_event',
-          summary: 'Create the Nov 7 meeting',
-          status: 'proposed',
-          toolUseId: 'toolu_1',
-          input: { title: 'Meeting', type: 'meeting', start: '2026-11-07T09:00', end: '2026-11-07T10:00', allDay: false },
-        },
-      ],
+      [eventAction()],
     );
 
     const plan = screen.getByText("Here's the plan");
@@ -544,21 +581,66 @@ describe('AssistantPage', () => {
     openThread(
       't1',
       [msg(1, 'user_text', 'Hello'), msg(2, 'assistant', 'Reply')],
-      [
-        {
-          id: 'a1',
-          type: 'post_announcement',
-          summary: 'Post the pavilion notice',
-          status: 'proposed',
-          toolUseId: 'toolu_missing',
-          input: { title: 'Pavilion', body: 'Closed Saturday', pinned: false },
-        },
-      ],
+      [eventAction({ toolUseId: 'toolu_missing' })],
     );
 
     const reply = screen.getByText('Reply');
-    const proposal = screen.getByText('Post the pavilion notice');
+    const proposal = screen.getByText('Create the Nov 7 meeting');
     expect(reply.compareDocumentPosition(proposal) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('shows each proposal as a card with Approve and Reject', () => {
+    renderPage();
+    openThread('t1', [msg(1, 'user_text', 'Hi'), msg(2, 'assistant', 'Done', {}, [toolUse('toolu_1')])], [eventAction()]);
+
+    expect(screen.getByText('Proposed')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Reject' })).toBeEnabled();
+  });
+
+  it('approves in the conversation that is open', async () => {
+    mockedExecute.mockResolvedValue({ status: 'executed', result: {} });
+    renderPage();
+    openThread('t7', [msg(1, 'user_text', 'Hi'), msg(2, 'assistant', 'Done', {}, [toolUse('toolu_1')])], [eventAction()]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+
+    await waitFor(() =>
+      expect(mockedExecute).toHaveBeenCalledWith({ threadId: 't7', actionId: 'a-event', mode: 'run' }),
+    );
+  });
+
+  it('keeps an email waiting for its event, and frees it the moment the event is approved', () => {
+    renderPage();
+    openThread(
+      't1',
+      [msg(1, 'user_text', 'Hi'), msg(2, 'assistant', 'Plan', {}, [toolUse('toolu_1')])],
+      [eventAction(), emailAction()],
+    );
+
+    expect(screen.getByRole('button', { name: 'Approve & send to everyone' })).toBeDisabled();
+    expect(screen.getByText('Approve the event first')).toBeInTheDocument();
+
+    act(() => emit.actions([eventAction({ status: 'executed', result: { eventId: 'ev1', title: 'Meeting' } }), emailAction()]));
+
+    expect(screen.getByRole('button', { name: 'Approve & send to everyone' })).toBeEnabled();
+    expect(screen.queryByText('Approve the event first')).not.toBeInTheDocument();
+  });
+
+  it('holds the cards back until the member list is there (their counts and pickers need it)', () => {
+    let deliverMembers: (m: Member[]) => void = () => {};
+    mockedListenMembers.mockImplementation((cb) => {
+      deliverMembers = cb;
+      return vi.fn();
+    });
+    renderPage();
+    openThread('t1', [msg(1, 'user_text', 'Hi'), msg(2, 'assistant', 'Plan', {}, [toolUse('toolu_1')])], [eventAction()]);
+
+    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
+
+    act(() => deliverMembers(members));
+
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeInTheDocument();
   });
 
   it("says so when the opened conversation can't be loaded", () => {

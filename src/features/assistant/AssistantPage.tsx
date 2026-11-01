@@ -1,11 +1,14 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../../auth/useAuth';
-import { Badge, Button } from '../../components/ui';
+import { Button } from '../../components/ui';
 import { formatGardenDate } from '../../lib/gardenTime';
+import { listenMembers } from '../members/membersApi';
+import ActionCard from './ActionCard';
 import { listenThreadActions, listenThreadMessages, listenThreads, sendAssistantMessage } from './assistantApi';
 import ChatMessage from './ChatMessage';
 import { errorText } from './errors';
 import { placeActions } from './placement';
+import type { Member } from '../../lib/types';
 import type { AssistantAction, AssistantMessage, AssistantThread, ChatUsage } from './types';
 
 /** The server refuses longer messages (MAX_MESSAGE_CHARS); say so up front rather than cut a paste short. */
@@ -31,19 +34,10 @@ function turnsLeftText(usage: ChatUsage): string {
   return `${left} turn${left === 1 ? '' : 's'} left today`;
 }
 
-/** Stands in until the action cards: one line per proposal. */
-function ProposalLine({ action }: { action: AssistantAction }) {
-  return (
-    <div className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800">
-      <Badge color="blue">Proposed</Badge>
-      <span className="min-w-0 whitespace-pre-wrap break-words">{action.summary}</span>
-    </div>
-  );
-}
-
 export default function AssistantPage() {
   const { member: me } = useAuth();
 
+  const [members, setMembers] = useState<Member[] | null>(null);
   const [threads, setThreads] = useState<AssistantThread[] | null>(null);
   const [threadsFailed, setThreadsFailed] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -60,6 +54,8 @@ export default function AssistantPage() {
   const sending = useRef(false); // blocks a double send before `busy` re-renders
   const boxRef = useRef<HTMLTextAreaElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => listenMembers(setMembers), []);
 
   useEffect(() => listenThreads(setThreads, () => setThreadsFailed(true)), []);
 
@@ -128,8 +124,20 @@ export default function AssistantPage() {
     }
   }
 
+  // The cards need the member list (recipient counts, the test-send picker) and who I am.
   const renderActions = (list: AssistantAction[] | undefined) =>
-    list?.map((action) => <ProposalLine key={action.id} action={action} />);
+    activeId && members && me
+      ? list?.map((action) => (
+          <ActionCard
+            key={action.id}
+            threadId={activeId}
+            action={action}
+            members={members}
+            me={me}
+            actions={actions ?? []}
+          />
+        ))
+      : null;
 
   return (
     <div className="flex flex-col gap-4 md:h-[calc(100vh-6.5rem)] md:flex-row">
