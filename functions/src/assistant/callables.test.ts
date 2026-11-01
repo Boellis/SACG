@@ -7,6 +7,7 @@ import type { BetaMessage } from '@anthropic-ai/sdk/resources/beta/messages/mess
 import { testDb, clearFirestore } from '../testing/emulator';
 import { recordProposal } from './actions';
 import {
+  anthropicCreateMessage,
   assistantChat,
   assistantExecuteAction,
   assistantRejectAction,
@@ -15,6 +16,27 @@ import {
   type ChatDeps,
 } from './callables';
 import type { CreateMessage } from './loop';
+
+// The real SDK (its error classes are used below), except that the client
+// class only records how it is built and called: no request ever leaves.
+const sdk = vi.hoisted(() => ({ constructed: [] as unknown[], created: [] as unknown[][] }));
+vi.mock('@anthropic-ai/sdk', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@anthropic-ai/sdk')>();
+  class RecordingAnthropic {
+    beta = {
+      messages: {
+        create: async (...args: unknown[]) => {
+          sdk.created.push(args);
+          return {};
+        },
+      },
+    };
+    constructor(options: unknown) {
+      sdk.constructed.push(options);
+    }
+  }
+  return { ...real, default: RecordingAnthropic };
+});
 
 // Callables must never reach Secret Manager or Anthropic in tests: every path
 // here injects its own key and model, and this stub makes a leak fail loudly.
@@ -66,6 +88,15 @@ beforeEach(async () => {
   await clearFirestore();
   await db.doc('members/admin1').set({ displayName: 'Brandon Ellis', email: 'brandon@example.com', role: 'admin', status: 'active' });
   await db.doc('members/m-denny').set({ displayName: 'Denny Smith', email: 'denny@example.com', role: 'member', status: 'active' });
+});
+
+describe('anthropicCreateMessage (the deployed model client)', () => {
+  it('sends each call with its per-call timeout, retry limit and abort signal', async () => {
+    const options = { timeout: 120_000, maxRetries: 1, signal: new AbortController().signal };
+    await anthropicCreateMessage('test-key-1')({ model: 'claude-opus-5-5' } as never, options);
+    expect(sdk.constructed).toEqual([{ apiKey: 'test-key-1' }]);
+    expect(sdk.created).toEqual([[{ model: 'claude-opus-5-5' }, options]]);
+  });
 });
 
 describe('assistantChat (deployed wrapper)', () => {

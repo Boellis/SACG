@@ -5,7 +5,15 @@ import type { BetaMessage, MessageCreateParamsNonStreaming } from '@anthropic-ai
 import { testDb, clearFirestore } from '../testing/emulator';
 import type { AdminCaller } from '../lib/auth';
 import { MAX_TOOL_ITERATIONS } from './config';
-import { REFUSAL_REPLY, TURN_TIME_BUDGET_MS, runTurn, type CreateMessage } from './loop';
+import { StaleTurnError } from './history';
+import {
+  REFUSAL_REPLY,
+  TURN_DEADLINE_MS,
+  TURN_TIME_BUDGET_MS,
+  runTurn,
+  type CreateMessage,
+  type ModelCallOptions,
+} from './loop';
 import { SYSTEM_PROMPT, turnContext } from './prompt';
 import { TOOL_DEFINITIONS } from './tools';
 
@@ -55,16 +63,18 @@ const thinking = (signature: string) => ({ type: 'thinking', thinking: '', signa
 const text = (t: string) => ({ type: 'text', text: t, citations: null });
 const toolUse = (id: string, name: string, input: unknown) => ({ type: 'tool_use', id, name, input });
 
-/** Each step answers one model call, in order; every call's params are kept. */
-function scripted(...steps: Array<(params: Params) => BetaMessage>) {
+/** Each step answers one model call, in order; every call's params and options are kept. */
+function scripted(...steps: Array<(params: Params) => BetaMessage | Promise<BetaMessage>>) {
   const calls: Params[] = [];
-  const createMessage: CreateMessage = vi.fn(async (params: Params) => {
+  const options: Array<ModelCallOptions | undefined> = [];
+  const createMessage: CreateMessage = vi.fn(async (params: Params, opts?: ModelCallOptions) => {
     calls.push(structuredClone(params));
+    options.push(opts);
     const step = steps[calls.length - 1];
     if (!step) throw new Error(`unexpected model call #${calls.length}`);
     return step(params);
   });
-  return { createMessage, calls };
+  return { createMessage, calls, options };
 }
 
 const last = <T>(items: T[]): T => items[items.length - 1];
@@ -336,6 +346,37 @@ describe('runTurn', () => {
     const result = await turn(createMessage, 'Hello', () => new Date(t));
     expect(calls).toHaveLength(2);
     expect(result.reply).toMatch(/continue/i);
+  });
+
+  it("bounds each model call by what's left of the turn, with at most one retry", async () => {
+    let t = NOW.getTime();
+    const { createMessage, options } = scripted(
+      () => {
+        t += 100_000;
+        return message([toolUse('tu_1', 'get_garden_info', {})], 'tool_use');
+      },
+      () => message([text('Done.')], 'end_turn'),
+    );
+    await turn(createMessage, 'Hello', () => new Date(t));
+    expect(TURN_DEADLINE_MS).toBeLessThan(300_000);
+    expect(options[0]).toMatchObject({ timeout: TURN_DEADLINE_MS, maxRetries: 1 });
+    expect(options[1]).toMatchObject({ timeout: TURN_DEADLINE_MS - 100_000, maxRetries: 1 });
+    // The signal caps the whole call, retries and backoff included.
+    for (const o of options) expect(o!.signal).toBeInstanceOf(AbortSignal);
+    expect(options[0]!.signal.aborted).toBe(false);
+  });
+
+  it('stops writing as soon as a newer turn has taken over the thread', async () => {
+    await db.doc(`assistantThreads/${THREAD}`).update({ turnToken: 'this-turn', turnStartedAt: Timestamp.fromDate(NOW) });
+    const { createMessage } = scripted(async () => {
+      // Meanwhile this turn's lease lapsed and a newer turn claimed the thread.
+      await db.doc(`assistantThreads/${THREAD}`).update({ turnToken: 'newer-turn' });
+      return message([text('A late reply')], 'end_turn');
+    });
+    await expect(
+      runTurn({ db, createMessage, now: () => NOW }, { threadId: THREAD, caller, userText: 'Hi', turnToken: 'this-turn' }),
+    ).rejects.toBeInstanceOf(StaleTurnError);
+    expect((await stored()).map((m) => m.kind)).toEqual(['user_text']);
   });
 
   it('answers bad tool calls with errors the model can fix, saving nothing', async () => {
