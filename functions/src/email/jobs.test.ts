@@ -1,10 +1,24 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Timestamp } from 'firebase-admin/firestore';
 import { testDb, clearFirestore } from '../testing/emulator';
-import { createEmailJob, processEmailJob, EMAIL_GAP_MS, MAX_RECIPIENTS, type CreateEmailJobInput } from './jobs';
+import { logger } from 'firebase-functions/v2';
+import {
+  createEmailJob,
+  processEmailJob,
+  EmailJobBusyError,
+  EMAIL_GAP_MS,
+  EMAIL_TRIGGER_TIMEOUT_S,
+  LEASE_MS,
+  MAX_RECIPIENTS,
+  type CreateEmailJobInput,
+} from './jobs';
 
 const db = testDb();
 const FAST = { gapMs: 0 };
+// The injected clock for leases.
+const NOW = new Date('2026-11-07T15:00:00Z');
+const clock = () => NOW;
+const minutesBefore = (m: number) => Timestamp.fromMillis(NOW.getTime() - m * 60_000);
 
 const MEMBERS: Record<string, Record<string, unknown>> = {
   admin1: { displayName: 'Ada Admin', email: 'ada@example.com', role: 'admin', status: 'active' },
@@ -34,6 +48,53 @@ const input = (over: Partial<CreateEmailJobInput> = {}): CreateEmailJobInput => 
 const mailFor = async (jobId: string) =>
   (await db.collection('mail').where('emailJobId', '==', jobId).get()).docs;
 const jobDoc = async (jobId: string) => (await db.doc(`emailJobs/${jobId}`).get()).data()!;
+
+/** `count` more active members with email, ids bulk{from}..bulk{from + count - 1}. */
+async function seedBulkMembers(count: number, from = 0): Promise<void> {
+  const batch = db.batch();
+  for (let i = from; i < from + count; i++) {
+    batch.set(db.doc(`members/bulk${i}`), {
+      displayName: `Bulk Member ${i}`,
+      email: `bulk${i}@example.com`,
+      role: 'member',
+      status: 'active',
+    });
+  }
+  await batch.commit();
+}
+
+/**
+ * A 3-recipient job (admin1, m-bea, m-denny) as an interrupted run leaves it:
+ * 'sending', claimed `claimedMinutesAgo` before NOW, with mail docs already
+ * written for `alreadySent`.
+ */
+async function interruptedJob(claimedMinutesAgo: number, alreadySent: string[]): Promise<string> {
+  const { jobId } = await createEmailJob(db, input());
+  await db.doc(`emailJobs/${jobId}`).update({
+    status: 'sending',
+    claimedAt: minutesBefore(claimedMinutesAgo),
+    sent: alreadySent.length,
+  });
+  for (const memberId of alreadySent) {
+    await db.doc(`mail/${jobId}_${memberId}`).set({ marker: 'sent by the earlier run', emailJobId: jobId });
+  }
+  return jobId;
+}
+
+describe('limits', () => {
+  it('a full job fits inside the trigger timeout with 30 s to spare', () => {
+    expect(EMAIL_GAP_MS).toBe(4000);
+    expect(EMAIL_TRIGGER_TIMEOUT_S).toBe(540);
+    // A gap between every two sends, plus up to 500 ms of Firestore work per recipient.
+    const worstCaseMs = (MAX_RECIPIENTS - 1) * EMAIL_GAP_MS + MAX_RECIPIENTS * 500;
+    expect(worstCaseMs).toBeLessThanOrEqual(EMAIL_TRIGGER_TIMEOUT_S * 1000 - 30_000);
+  });
+
+  it('a lease outlives the trigger timeout, so a live run is never stolen from', () => {
+    expect(LEASE_MS).toBe(600_000);
+    expect(LEASE_MS).toBeGreaterThan(EMAIL_TRIGGER_TIMEOUT_S * 1000);
+  });
+});
 
 describe('createEmailJob', () => {
   it('queues a job with the resolved recipients and the spec shape', async () => {
@@ -83,18 +144,15 @@ describe('createEmailJob', () => {
     });
   });
 
-  it('rejects more than MAX_RECIPIENTS recipients', async () => {
-    const batch = db.batch();
-    for (let i = 0; i < MAX_RECIPIENTS + 1; i++) {
-      batch.set(db.doc(`members/bulk${i}`), {
-        displayName: `Bulk Member ${i}`,
-        email: `bulk${i}@example.com`,
-        role: 'member',
-        status: 'active',
-      });
-    }
-    await batch.commit();
-    await expect(createEmailJob(db, input())).rejects.toMatchObject({ code: 'invalid-argument' });
+  it('accepts 100 recipients and rejects 101 as invalid-argument', async () => {
+    expect(MAX_RECIPIENTS).toBe(100);
+    await seedBulkMembers(97); // + admin1, m-bea and m-denny = 100
+    await expect(createEmailJob(db, input())).resolves.toMatchObject({ total: 100 });
+    await seedBulkMembers(1, 97); // the 101st
+    await expect(createEmailJob(db, input())).rejects.toMatchObject({
+      code: 'invalid-argument',
+      message: "That's 101 recipients; the limit is 100 per email.",
+    });
   });
 
   it('rejects an audience with no deliverable recipients', async () => {
@@ -160,7 +218,12 @@ describe('processEmailJob', () => {
 
   it('two concurrent runs of the same job send exactly once', async () => {
     const { jobId } = await createEmailJob(db, input());
-    await Promise.all([processEmailJob(db, jobId, FAST), processEmailJob(db, jobId, FAST)]);
+    const runs = await Promise.allSettled([processEmailJob(db, jobId, FAST), processEmailJob(db, jobId, FAST)]);
+    // One run claims the job. The other finds it under that run's fresh lease and
+    // throws the retryable busy error (or, starting after the first finished, finds
+    // it done and does nothing).
+    expect(runs.some((r) => r.status === 'fulfilled')).toBe(true);
+    for (const r of runs) if (r.status === 'rejected') expect(r.reason).toBeInstanceOf(EmailJobBusyError);
     expect(await mailFor(jobId)).toHaveLength(3);
     expect(await jobDoc(jobId)).toMatchObject({ status: 'done', sent: 3, failed: 0 });
   });
@@ -240,11 +303,123 @@ describe('processEmailJob', () => {
     expect(job.finishedAt).toBeInstanceOf(Timestamp);
   });
 
-  it('ignores jobs that are missing or not queued', async () => {
-    await processEmailJob(db, 'does-not-exist', FAST);
+  it('leaves missing, done and failed jobs alone', async () => {
+    await expect(processEmailJob(db, 'does-not-exist', FAST)).resolves.toBeUndefined();
+    for (const status of ['done', 'failed']) {
+      const { jobId } = await createEmailJob(db, input());
+      await db.doc(`emailJobs/${jobId}`).update({ status });
+      await expect(processEmailJob(db, jobId, FAST)).resolves.toBeUndefined();
+      expect(await mailFor(jobId)).toHaveLength(0);
+      expect(await jobDoc(jobId)).toMatchObject({ status, sent: 0 });
+    }
+  });
+
+  it('claims a queued job with a lease from the injected clock', async () => {
+    const { jobId } = await createEmailJob(db, input());
+    let leased: unknown;
+    // Peek at the job between sends, while this run holds it.
+    const sleep = vi.fn(async () => {
+      leased ??= (await jobDoc(jobId)).claimedAt;
+    });
+    await processEmailJob(db, jobId, { sleep, now: clock });
+    expect(leased).toEqual(Timestamp.fromDate(NOW));
+    expect(await jobDoc(jobId)).toMatchObject({ status: 'done', sent: 3 });
+  });
+
+  it('resumes a job whose lease expired (11 min): sends only the missing mail and ends done', async () => {
+    const jobId = await interruptedJob(11, ['admin1', 'm-bea']);
+    const sleep = vi.fn(async (_ms: number) => {});
+    await processEmailJob(db, jobId, { sleep, now: clock });
+
+    expect(await mailFor(jobId)).toHaveLength(3);
+    for (const memberId of ['admin1', 'm-bea']) {
+      // create() never overwrites: the earlier run's mail docs are untouched.
+      expect((await db.doc(`mail/${jobId}_${memberId}`).get()).data()).toEqual({
+        marker: 'sent by the earlier run',
+        emailJobId: jobId,
+      });
+    }
+    expect((await db.doc(`mail/${jobId}_m-denny`).get()).get('to')).toEqual(['denny@example.com']);
+    const job = await jobDoc(jobId);
+    expect(job).toMatchObject({ status: 'done', sent: 3, failed: 0 });
+    expect(job.claimedAt).toEqual(Timestamp.fromDate(NOW));
+    expect(job.finishedAt).toBeInstanceOf(Timestamp);
+    expect(sleep).not.toHaveBeenCalled(); // the only new mail was also the last
+  });
+
+  it.each([1, 9])(
+    'throws a retryable error and sends nothing while another run holds a fresh lease (%i min old)',
+    async (minutes) => {
+      const jobId = await interruptedJob(minutes, []);
+      const before = await jobDoc(jobId);
+      await expect(processEmailJob(db, jobId, { ...FAST, now: clock })).rejects.toBeInstanceOf(EmailJobBusyError);
+      expect(await mailFor(jobId)).toHaveLength(0);
+      expect(await jobDoc(jobId)).toEqual(before); // still 'sending' under the other run's lease
+    },
+  );
+
+  it('never sleeps for mail an earlier run already queued, only after newly created mail', async () => {
+    const jobId = await interruptedJob(11, ['admin1']);
+    const sleep = vi.fn(async (_ms: number) => {});
+    await processEmailJob(db, jobId, { sleep, now: clock });
+    // admin1 already queued: no wait. m-bea new: one gap. m-denny new but last: no wait.
+    expect(sleep.mock.calls).toEqual([[EMAIL_GAP_MS]]);
+    expect(await jobDoc(jobId)).toMatchObject({ status: 'done', sent: 3, failed: 0 });
+  });
+
+  it('writes absolute counts on a resume, so nothing is double-counted', async () => {
+    const jobId = await interruptedJob(11, ['admin1', 'm-bea']);
+    // As the earlier run left them: m-denny's send had failed.
+    await db.doc(`emailJobs/${jobId}`).update({ sent: 2, failed: 1 });
+    await processEmailJob(db, jobId, { ...FAST, now: clock });
+    expect(await jobDoc(jobId)).toMatchObject({ status: 'done', sent: 3, failed: 0 });
+  });
+
+  it('finishes a resumed job whose mail was all queued already (the run died before its final write)', async () => {
+    const jobId = await interruptedJob(11, ['admin1', 'm-bea', 'm-denny']);
+    // It queued m-denny's mail, then died before writing that progress.
+    await db.doc(`emailJobs/${jobId}`).update({ sent: 2 });
+    const sleep = vi.fn(async (_ms: number) => {});
+    await processEmailJob(db, jobId, { sleep, now: clock });
+    expect(await mailFor(jobId)).toHaveLength(3);
+    expect(await jobDoc(jobId)).toMatchObject({ status: 'done', sent: 3, failed: 0 });
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it('resumes a job left sending without any lease', async () => {
     const { jobId } = await createEmailJob(db, input());
     await db.doc(`emailJobs/${jobId}`).update({ status: 'sending' });
-    await processEmailJob(db, jobId, FAST);
-    expect(await mailFor(jobId)).toHaveLength(0);
+    await processEmailJob(db, jobId, { ...FAST, now: clock });
+    expect(await mailFor(jobId)).toHaveLength(3);
+    expect(await jobDoc(jobId)).toMatchObject({ status: 'done', sent: 3, failed: 0 });
+  });
+
+  it('an infrastructure error propagates, leaving the job leased; a run after the lease resumes it', async () => {
+    vi.spyOn(logger, 'error').mockImplementation(() => {});
+    try {
+      const { jobId } = await createEmailJob(db, input());
+      const crash = new Error('instance shut down mid-job');
+      await expect(
+        processEmailJob(db, jobId, {
+          sleep: async () => {
+            throw crash;
+          },
+          now: clock,
+        }),
+      ).rejects.toBe(crash);
+      // Not marked failed: still 'sending' under this run's lease, with its progress.
+      expect(await jobDoc(jobId)).toMatchObject({ status: 'sending', sent: 1, failed: 0 });
+      expect(await mailFor(jobId)).toHaveLength(1);
+
+      // A redelivery inside the lease backs off ...
+      await expect(processEmailJob(db, jobId, { ...FAST, now: clock })).rejects.toBeInstanceOf(EmailJobBusyError);
+      // ... and one after it expires finishes the job.
+      const later = () => new Date(NOW.getTime() + LEASE_MS + 1);
+      await processEmailJob(db, jobId, { ...FAST, now: later });
+      expect(await mailFor(jobId)).toHaveLength(3);
+      expect(await jobDoc(jobId)).toMatchObject({ status: 'done', sent: 3, failed: 0 });
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });

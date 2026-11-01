@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import type { CallableRequest } from 'firebase-functions/v2/https';
 import { testDb, clearFirestore } from '../testing/emulator';
 import { queueMemberEmail, onEmailJobCreated } from './callables';
+import { EMAIL_TRIGGER_TIMEOUT_S } from './jobs';
 
 const db = testDb();
 
@@ -77,6 +78,13 @@ describe('queueMemberEmail', () => {
 });
 
 describe('onEmailJobCreated', () => {
+  it('runs with the pinned timeout and retries a failed run (which resumes the job)', () => {
+    expect(onEmailJobCreated.__endpoint).toMatchObject({
+      timeoutSeconds: EMAIL_TRIGGER_TIMEOUT_S,
+      eventTrigger: { retry: true },
+    });
+  });
+
   it('processes the newly created job', async () => {
     const { jobId } = await call({ ...valid, testMemberId: 'm-denny' }, 'admin1');
     await onEmailJobCreated.run({ params: { jobId } } as unknown as Parameters<typeof onEmailJobCreated.run>[0]);

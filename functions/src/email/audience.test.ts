@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { testDb, clearFirestore } from '../testing/emulator';
-import { AudienceSchema, resolveAudience, describeAudience, type Audience } from './audience';
+import { AudienceSchema, MAX_RECIPIENTS, resolveAudience, describeAudience, type Audience } from './audience';
 
 const db = testDb();
 
@@ -78,11 +78,12 @@ describe('AudienceSchema', () => {
     ).toBe(false);
   });
 
-  it('bounds memberIds to 1..150 valid document ids', () => {
+  it('bounds memberIds to 1..MAX_RECIPIENTS (100) valid document ids', () => {
+    expect(MAX_RECIPIENTS).toBe(100);
     expect(AudienceSchema.safeParse({ kind: 'members', memberIds: [] }).success).toBe(false);
-    const ids = Array.from({ length: 151 }, (_, i) => `m${i}`);
+    const ids = Array.from({ length: 101 }, (_, i) => `m${i}`);
     expect(AudienceSchema.safeParse({ kind: 'members', memberIds: ids }).success).toBe(false);
-    expect(AudienceSchema.safeParse({ kind: 'members', memberIds: ids.slice(0, 150) }).success).toBe(true);
+    expect(AudienceSchema.safeParse({ kind: 'members', memberIds: ids.slice(0, 100) }).success).toBe(true);
     expect(AudienceSchema.safeParse({ kind: 'members', memberIds: ['a/b'] }).success).toBe(false);
   });
 

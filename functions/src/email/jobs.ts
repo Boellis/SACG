@@ -1,13 +1,19 @@
-import { FieldValue, type Firestore, type Timestamp } from 'firebase-admin/firestore';
+import { FieldValue, Timestamp, type Firestore } from 'firebase-admin/firestore';
 import { HttpsError } from 'firebase-functions/v2/https';
 import { logger } from 'firebase-functions/v2';
-import { AudienceSchema, DocIdSchema, resolveAudience, type Audience, type Recipient } from './audience';
+import { AudienceSchema, DocIdSchema, MAX_RECIPIENTS, resolveAudience, type Audience, type Recipient } from './audience';
 import { composeEmail, RSVP_LINK_TOKEN } from './compose';
 import { findOrCreateInvite, rsvpUrl } from '../rsvp/invites';
 
-export const MAX_RECIPIENTS = 150;
+export { MAX_RECIPIENTS };
 /** Spacing between sends so Gmail's SMTP rate limit doesn't 421 a burst. */
 export const EMAIL_GAP_MS = 4000;
+/** onEmailJobCreated's timeout (the most an event trigger may have). A full
+ *  job must finish inside it: see the timing budget test in jobs.test.ts. */
+export const EMAIL_TRIGGER_TIMEOUT_S = 540;
+/** How long a run's claim on a job holds. Longer than the trigger timeout, so
+ *  a live run is never stolen from; a dead run's job is resumed once it lapses. */
+export const LEASE_MS = 600_000;
 export const EMAIL_JOBS = 'emailJobs';
 const MAX_SUBJECT = 200;
 const MAX_BODY = 20_000;
@@ -43,6 +49,8 @@ export interface EmailJobDoc {
   createdBy: string;
   createdByName: string;
   createdAt: Timestamp;
+  /** When the current (or last) run claimed the job; see LEASE_MS. */
+  claimedAt?: Timestamp;
   finishedAt?: Timestamp;
   error?: string;
   assistantRef?: { threadId: string; actionId: string };
@@ -123,34 +131,76 @@ const errorText = (err: unknown) => (err instanceof Error ? err.message : String
 const isAlreadyExists = (err: unknown) => (err as { code?: unknown } | null)?.code === 6;
 
 /**
- * Deliver a queued job: one `mail/{jobId}_{memberId}` doc per recipient (picked
- * up by the Trigger Email extension), spaced `gapMs` apart. Idempotent: only a
- * 'queued' job is claimed (transactionally → 'sending'), and mail docs are
- * written with create(), so a retry or a second trigger never sends twice.
+ * Thrown when another run holds a fresh lease on the job. The trigger retries
+ * (`retry: true`), so a redelivered event backs off until that run finishes
+ * (the job is then done: a no-op) or its lease lapses (a retry then resumes it).
+ */
+export class EmailJobBusyError extends Error {
+  constructor(jobId: string) {
+    super(`emailJob ${jobId} is held by another run's lease; retry later`);
+    this.name = 'EmailJobBusyError';
+  }
+}
+
+export interface ProcessEmailJobOptions {
+  gapMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+  /** Clock for the lease (injectable for tests). */
+  now?: () => Date;
+}
+
+type Claim = { kind: 'claimed'; job: EmailJobDoc } | { kind: 'busy' } | { kind: 'skip' };
+
+// A lease is fresh until it is older than LEASE_MS. A job left 'sending'
+// without one has no live run to protect, so it counts as lapsed.
+const leaseIsFresh = (claimedAt: unknown, now: Date) =>
+  claimedAt instanceof Timestamp && now.getTime() - claimedAt.toMillis() <= LEASE_MS;
+
+/**
+ * Deliver a job: one `mail/{jobId}_{memberId}` doc per recipient (picked up by
+ * the Trigger Email extension), each newly written one followed by a `gapMs`
+ * gap. A run claims the job in a transaction (status 'sending', `claimedAt`
+ * from `now`) when it is 'queued', or 'sending' under a lapsed lease: that is a
+ * run that died, and this one resumes it. A fresh lease throws
+ * EmailJobBusyError; a done/failed or missing job is a no-op.
+ *
+ * Mail docs are written with create(), so a resume or a second trigger never
+ * sends twice. A recipient whose doc already exists counts as sent, without a
+ * gap. `sent`/`failed` are absolute counts over all recipients, never
+ * increments, so a resume can't double-count. Per-recipient failures are
+ * counted and the job still ends 'done' (or 'failed' if every send failed).
+ * Any other error (e.g. a progress write) propagates, leaving the job leased,
+ * and the trigger's retry resumes it once the lease lapses.
  */
 export async function processEmailJob(
   db: Firestore,
   jobId: string,
-  opts: { gapMs?: number; sleep?: (ms: number) => Promise<void> } = {},
+  opts: ProcessEmailJobOptions = {},
 ): Promise<void> {
   const gapMs = opts.gapMs ?? EMAIL_GAP_MS;
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const now = opts.now ?? (() => new Date());
   const ref = db.collection(EMAIL_JOBS).doc(jobId);
 
-  const job = await db.runTransaction(async (tx) => {
+  const claim = await db.runTransaction(async (tx): Promise<Claim> => {
     const snap = await tx.get(ref);
-    if (!snap.exists || snap.get('status') !== 'queued') return null;
-    tx.update(ref, { status: 'sending' });
-    return snap.data() as EmailJobDoc;
+    const status = snap.get('status');
+    if (!snap.exists || (status !== 'queued' && status !== 'sending')) return { kind: 'skip' };
+    const at = now();
+    if (status === 'sending' && leaseIsFresh(snap.get('claimedAt'), at)) return { kind: 'busy' };
+    tx.update(ref, { status: 'sending', claimedAt: Timestamp.fromDate(at) });
+    return { kind: 'claimed', job: snap.data() as EmailJobDoc };
   });
-  if (!job) return;
+  if (claim.kind === 'busy') throw new EmailJobBusyError(jobId);
+  if (claim.kind === 'skip') return;
+  const { job } = claim;
 
   let sent = 0;
   let failed = 0;
   let lastError = '';
   try {
     for (const [i, r] of job.recipients.entries()) {
-      if (i > 0 && gapMs > 0) await sleep(gapMs);
+      let outcome: 'created' | 'existed' | 'failed';
       try {
         const link = job.rsvpEventId
           ? rsvpUrl(
@@ -170,26 +220,38 @@ export async function processEmailJob(
           createdAt: FieldValue.serverTimestamp(),
           emailJobId: jobId,
         });
-        sent += 1;
+        outcome = 'created';
       } catch (err) {
         if (isAlreadyExists(err)) {
-          sent += 1;
+          outcome = 'existed';
         } else {
-          failed += 1;
+          outcome = 'failed';
           lastError = errorText(err);
           logger.error(`emailJob ${jobId}: send to member ${r.memberId} failed`, { error: lastError });
         }
       }
+      if (outcome === 'failed') failed += 1;
+      else sent += 1;
+      // A doc an earlier run already queued: no gap, and no progress write (a
+      // resume skips through these quickly; the final write has the counts).
+      if (outcome === 'existed') continue;
       await ref.update({ sent, failed });
+      if (outcome === 'created' && gapMs > 0 && i < job.recipients.length - 1) await sleep(gapMs);
     }
     const allFailed = failed > 0 && sent === 0;
     await ref.update({
+      sent,
+      failed,
       status: allFailed ? 'failed' : 'done',
       finishedAt: FieldValue.serverTimestamp(),
       ...(allFailed ? { error: lastError || 'Every send failed.' } : {}),
     });
   } catch (err) {
-    logger.error(`emailJob ${jobId} aborted`, { error: errorText(err) });
-    await ref.update({ status: 'failed', error: errorText(err), sent, failed, finishedAt: FieldValue.serverTimestamp() });
+    logger.error(`emailJob ${jobId} interrupted; it stays leased and a retry resumes it`, {
+      error: errorText(err),
+      sent,
+      failed,
+    });
+    throw err;
   }
 }

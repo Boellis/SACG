@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { getInvite, submitRsvp, type InviteResponse, type InviteView } from './rsvpApi';
+import { CONTACT_EMAIL } from './constants';
 import { typeLabel } from '../calendar/eventText';
 import { GARDEN_TZ, formatGardenDate, formatGardenTime } from '../../lib/gardenTime';
 import type { RsvpStatus } from '../../lib/types';
@@ -8,7 +9,6 @@ import type { RsvpStatus } from '../../lib/types';
 // Public, no-login page behind each member's emailed RSVP link (/rsvp/:token).
 // Most members open it on a phone, so it is a single column with big targets.
 
-const CONTACT_EMAIL = 'southatxgarden@gmail.com';
 const MAX_PARTY_SIZE = 20;
 const ANSWERS: Array<{ value: RsvpStatus; label: string }> = [
   { value: 'yes', label: 'Yes' },

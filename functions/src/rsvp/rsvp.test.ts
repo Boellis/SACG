@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Timestamp } from 'firebase-admin/firestore';
 import type { CallableRequest } from 'firebase-functions/v2/https';
+import { logger } from 'firebase-functions/v2';
 import { testDb, clearFirestore } from '../testing/emulator';
 import { findOrCreateInvite } from './invites';
 import { getInvite, submitRsvp, rsvpGetInvite, rsvpSubmit, MAX_SUBMITS_PER_TOKEN } from './callables';
@@ -35,6 +36,10 @@ beforeEach(async () => {
   await db.doc('events/NOV7/rsvps/m-bea').set({ status: 'yes', displayName: 'Bea Example', partySize: 2 });
   token = await findOrCreateInvite(db, { eventId: 'NOV7', memberId: 'm-denny', displayName: 'Denny Smith' });
 });
+
+// Well-formed characters, but Firestore reserves ids matching __.*__ and
+// answers a lookup with a raw INVALID_ARGUMENT instead of "not found".
+const RESERVED_TOKEN = '__aaaaaaaaaaaaaaaaaaaa__';
 
 const rsvpDoc = async () => (await db.doc('events/NOV7/rsvps/m-denny').get()).data();
 const inviteDoc = async () => (await db.doc(`rsvpInvites/${token}`).get()).data()!;
@@ -90,6 +95,7 @@ describe('getInvite', () => {
     ['an unknown well-formed token', 'A'.repeat(43)],
     ['a malformed token', 'smoke-bogus-token'],
     ['a token with bad characters', 'abc/def/../ghi$jkl%mnopqrstuvwxyz'],
+    ['a reserved __…__ token', RESERVED_TOKEN],
     ['a missing token', undefined],
     ['a non-string token', 12345],
   ])('rejects %s as not-found', async (_label, bad) => {
@@ -141,6 +147,9 @@ describe('submitRsvp', () => {
       code: 'not-found',
     });
     await expect(submitRsvp(db, { token: 'smoke-bogus-token', status: 'yes' }, NOW)).rejects.toMatchObject({
+      code: 'not-found',
+    });
+    await expect(submitRsvp(db, { token: RESERVED_TOKEN, status: 'yes' }, NOW)).rejects.toMatchObject({
       code: 'not-found',
     });
     await expect(submitRsvp(db, null, NOW)).rejects.toMatchObject({ code: 'not-found' });
@@ -214,6 +223,34 @@ describe('public callables (no sign-in)', () => {
   it('rsvpGetInvite rejects the smoke-check bogus token as not-found', async () => {
     await expect(rsvpGetInvite.run(req({ token: 'smoke-bogus-token' }))).rejects.toMatchObject({ code: 'not-found' });
     await expect(rsvpGetInvite.run(req(null))).rejects.toMatchObject({ code: 'not-found' });
+  });
+
+  it('both callables answer a reserved __…__ token as not-found (the invalid-link copy)', async () => {
+    await expect(rsvpGetInvite.run(req({ token: RESERVED_TOKEN }))).rejects.toMatchObject({ code: 'not-found' });
+    await expect(rsvpSubmit.run(req({ token: RESERVED_TOKEN, status: 'yes' }))).rejects.toMatchObject({
+      code: 'not-found',
+    });
+  });
+
+  it('both callables log an unexpected error and answer unavailable, never internal', async () => {
+    const logged = vi.spyOn(logger, 'error').mockImplementation(() => {});
+    try {
+      // A corrupt invite: its eventId isn't a document id, so Firestore throws a raw error.
+      const corrupt = 'C'.repeat(43);
+      await db
+        .doc(`rsvpInvites/${corrupt}`)
+        .set({ eventId: 'a/b', memberId: 'm-denny', displayName: 'Denny Smith', uses: 0 });
+      const unavailable = { code: 'unavailable', message: expect.stringMatching(/try again/i) };
+      await expect(rsvpGetInvite.run(req({ token: corrupt }))).rejects.toMatchObject(unavailable);
+      await expect(rsvpSubmit.run(req({ token: corrupt, status: 'yes' }))).rejects.toMatchObject(unavailable);
+      expect(logged).toHaveBeenCalledTimes(2);
+      expect(logged.mock.calls.map((c) => String(c[0]))).toEqual([
+        expect.stringContaining('rsvpGetInvite'),
+        expect.stringContaining('rsvpSubmit'),
+      ]);
+    } finally {
+      logged.mockRestore();
+    }
   });
 
   it('rsvpSubmit records an anonymous answer', async () => {
