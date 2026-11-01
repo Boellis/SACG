@@ -11,6 +11,8 @@ setGlobalOptions({ region: 'us-central1' });
 export { queueMemberEmail, onEmailJobCreated } from './email/callables';
 // Public, token-gated RSVP links (no sign-in).
 export { rsvpGetInvite, rsvpSubmit } from './rsvp/callables';
+// Admin AI assistant: a Claude tool-use loop that can only propose actions.
+export { assistantChat, assistantExecuteAction, assistantRejectAction } from './assistant/callables';
 
 /**
  * Who gets waitlist / duplicate alerts. Add or change addresses here and
